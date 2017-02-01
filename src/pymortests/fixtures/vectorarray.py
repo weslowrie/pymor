@@ -84,6 +84,18 @@ if config.HAVE_DEALII:
         return U
 
 
+if config.HAVE_DUNEXT:
+    from dune.xt.la import IstlDenseVector_double
+    from pymor.bindings.dunext import DuneXTVectorSpace
+
+    def dunext_vector_array_factory(length, dim, seed):
+        U = DuneXTVectorSpace(IstlDenseVector_double, dim).zeros(length)
+        np.random.seed(seed)
+        for v, a in zip(U._list, np.random.random((length, dim))):
+            v.data[:] = a
+        return U
+
+
 def vector_array_from_empty_reserve(v, reserve):
     if reserve == 0:
         return v
@@ -155,6 +167,10 @@ dealii_vector_array_generators = \
     [lambda args=args: dealii_vector_array_factory(*args) for args in numpy_vector_array_factory_arguments] \
     if config.HAVE_DEALII else []
 
+dunext_vector_array_generators = \
+    [lambda args=args: dunext_vector_array_factory(*args) for args in numpy_vector_array_factory_arguments] \
+    if config.HAVE_DUNEXT else []
+
 numpy_vector_array_pair_with_same_dim_generators = \
     [lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (numpy_vector_array_factory(l, d, s1),
                                             numpy_vector_array_factory(l2, d, s2))
@@ -181,6 +197,12 @@ dealii_vector_array_pair_with_same_dim_generators = \
                                             dealii_vector_array_factory(l2, d, s2))
      for l, l2, d, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_same_dim] \
     if config.HAVE_DEALII else []
+
+dunext_vector_array_pair_with_same_dim_generators = \
+    [lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (dunext_vector_array_factory(l, d, s1),
+                                            dunext_vector_array_factory(l2, d, s2))
+     for l, l2, d, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_same_dim] \
+    if config.HAVE_DUNEXT else []
 
 numpy_vector_array_pair_with_different_dim_generators = \
     [lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (numpy_vector_array_factory(l, d1, s1),
@@ -209,15 +231,22 @@ dealii_vector_array_pair_with_different_dim_generators = \
      for l, l2, d1, d2, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_different_dim] \
     if config.HAVE_DEALII else []
 
+dunext_vector_array_pair_with_different_dim_generators = \
+    [lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (dunext_vector_array_factory(l, d1, s1),
+                                                     dunext_vector_array_factory(l2, d2, s2))
+     for l, l2, d1, d2, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_different_dim] \
+    if config.HAVE_DUNEXT else []
+
 
 @pytest.fixture(params=numpy_vector_array_generators + numpy_list_vector_array_generators +
-                       block_vector_array_generators + fenics_vector_array_generators)
+                       block_vector_array_generators + fenics_vector_array_generators +
+                       dealii_vector_array_generators + dunext_vector_array_generators)
 def vector_array_without_reserve(request):
     return request.param()
 
 
 @pytest.fixture(params=numpy_vector_array_generators + numpy_list_vector_array_generators +
-                       block_vector_array_generators)
+                       block_vector_array_generators + dunext_vector_array_generators)
 def picklable_vector_array_without_reserve(request):
     return request.param()
 
@@ -235,7 +264,9 @@ def picklable_vector_array(picklable_vector_array_without_reserve, request):
 @pytest.fixture(params=(numpy_vector_array_pair_with_same_dim_generators +
                         numpy_list_vector_array_pair_with_same_dim_generators +
                         block_vector_array_pair_with_same_dim_generators +
-                        fenics_vector_array_pair_with_same_dim_generators))
+                        fenics_vector_array_pair_with_same_dim_generators +
+                        dealii_vector_array_pair_with_same_dim_generators +
+                        dunext_vector_array_pair_with_same_dim_generators))
 def compatible_vector_array_pair_without_reserve(request):
     return request.param()
 
@@ -250,6 +281,7 @@ def compatible_vector_array_pair(compatible_vector_array_pair_without_reserve, r
                         numpy_list_vector_array_pair_with_different_dim_generators +
                         block_vector_array_pair_with_different_dim_generators +
                         fenics_vector_array_pair_with_different_dim_generators +
-                        dealii_vector_array_pair_with_different_dim_generators))
+                        dealii_vector_array_pair_with_different_dim_generators +
+                        dunext_vector_array_pair_with_different_dim_generators))
 def incompatible_vector_array_pair(request):
     return request.param()
