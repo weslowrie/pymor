@@ -85,15 +85,29 @@ if config.HAVE_DEALII:
 
 
 if config.HAVE_DUNEXT:
-    from dune.xt.la import IstlDenseVector_double
     from pymor.bindings.dunext import DuneXTVectorSpace
+    import dune.xt.la
 
-    def dunext_vector_array_factory(length, dim, seed):
-        U = DuneXTVectorSpace(IstlDenseVector_double, dim).zeros(length)
+    def _dunext_vector_array_factory(V, length, dim, seed):
+        U = DuneXTVectorSpace(V, dim).zeros(length)
         np.random.seed(seed)
         for v, a in zip(U._list, np.random.random((length, dim))):
             v.data[:] = a
         return U
+
+    def dunext_common_vector_array_factory(length, dim, seed):
+        from dune.xt.la import CommonDenseVector_double
+        return _dunext_vector_array_factory(CommonDenseVector_double, length, dim, seed)
+
+    if dune.xt.la.HAVE_DUNE_ISTL:
+        from dune.xt.la import IstlDenseVector_double
+        def dunext_istl_vector_array_factory(length, dim, seed):
+            return _dunext_vector_array_factory(IstlDenseVector_double, length, dim, seed)
+
+    if dune.xt.la.HAVE_EIGEN:
+        from dune.xt.la import EigenDenseVector_double
+        def dunext_eigen_vector_array_factory(length, dim, seed):
+            return _dunext_vector_array_factory(EigenDenseVector_double, length, dim, seed)
 
 
 def vector_array_from_empty_reserve(v, reserve):
@@ -168,8 +182,16 @@ dealii_vector_array_generators = \
     if config.HAVE_DEALII else []
 
 dunext_vector_array_generators = \
-    [lambda args=args: dunext_vector_array_factory(*args) for args in numpy_vector_array_factory_arguments] \
+    [lambda args=args: dunext_common_vector_array_factory(*args) for args in numpy_vector_array_factory_arguments] \
     if config.HAVE_DUNEXT else []
+if config.HAVE_DUNEXT:
+    import dune.xt.la
+    if dune.xt.la.HAVE_DUNE_ISTL:
+        dunext_vector_array_generators.extend(lambda args=args: dunext_istl_vector_array_factory(*args)
+                                              for args in numpy_vector_array_factory_arguments)
+    if dune.xt.la.HAVE_EIGEN:
+        dunext_vector_array_generators.extend(lambda args=args: dunext_eigen_vector_array_factorys(*args)
+                                              for args in numpy_vector_array_factory_arguments)
 
 numpy_vector_array_pair_with_same_dim_generators = \
     [lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (numpy_vector_array_factory(l, d, s1),
@@ -199,10 +221,22 @@ dealii_vector_array_pair_with_same_dim_generators = \
     if config.HAVE_DEALII else []
 
 dunext_vector_array_pair_with_same_dim_generators = \
-    [lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (dunext_vector_array_factory(l, d, s1),
-                                            dunext_vector_array_factory(l2, d, s2))
+    [lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (dunext_common_vector_array_factory(l, d, s1),
+                                            dunext_common_vector_array_factory(l2, d, s2))
      for l, l2, d, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_same_dim] \
     if config.HAVE_DUNEXT else []
+if config.HAVE_DUNEXT:
+    import dune.xt.la
+    if dune.xt.la.HAVE_DUNE_ISTL:
+        dunext_vector_array_pair_with_same_dim_generators.extend(
+                lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (dunext_istl_vector_array_factory(l, d, s1),
+                                                       dunext_istl_vector_array_factory(l2, d, s2))
+                for l, l2, d, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_same_dim)
+    if dune.xt.la.HAVE_EIGEN:
+        dunext_vector_array_pair_with_same_dim_generators.extend(
+                lambda l=l, l2=l2, d=d, s1=s1, s2=s2: (dunext_eigen_vector_array_factory(l, d, s1),
+                                                       dunext_eigen_vector_array_factory(l2, d, s2))
+                for l, l2, d, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_same_dim)
 
 numpy_vector_array_pair_with_different_dim_generators = \
     [lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (numpy_vector_array_factory(l, d1, s1),
@@ -232,10 +266,22 @@ dealii_vector_array_pair_with_different_dim_generators = \
     if config.HAVE_DEALII else []
 
 dunext_vector_array_pair_with_different_dim_generators = \
-    [lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (dunext_vector_array_factory(l, d1, s1),
-                                                     dunext_vector_array_factory(l2, d2, s2))
+    [lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (dunext_common_vector_array_factory(l, d1, s1),
+                                                     dunext_common_vector_array_factory(l2, d2, s2))
      for l, l2, d1, d2, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_different_dim] \
     if config.HAVE_DUNEXT else []
+if config.HAVE_DUNEXT:
+    import dune.xt.la
+    if dune.xt.la.HAVE_DUNE_ISTL:
+        dunext_vector_array_pair_with_different_dim_generators.extend(
+                lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (dunext_istl_vector_array_factory(l, d1, s1),
+                                                                dunext_istl_vector_array_factory(l2, d2, s2))
+                for l, l2, d1, d2, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_different_dim)
+    if dune.xt.la.HAVE_EIGEN:
+        dunext_vector_array_pair_with_different_dim_generators.extend(
+                lambda l=l, l2=l2, d1=d1, d2=d2, s1=s1, s2=s2: (dunext_eigen_vector_array_factory(l, d1, s1),
+                                                                dunext_eigen_vector_array_factory(l2, d2, s2))
+                for l, l2, d1, d2, s1, s2 in numpy_vector_array_factory_arguments_pairs_with_different_dim)
 
 
 @pytest.fixture(params=numpy_vector_array_generators + numpy_list_vector_array_generators +
