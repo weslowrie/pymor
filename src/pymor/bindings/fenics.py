@@ -222,10 +222,14 @@ if config.HAVE_FENICS:
         ----------
         space
             The `FenicsVectorSpace` for which we want to visualize DOF vectors.
+        mesh_refinements
+            Number of uniform mesh refinements to perform for vtk visualization
+            (of functions from higher-order FE spaces).
         """
 
-        def __init__(self, space):
+        def __init__(self, space, mesh_refinements=0):
             self.space = space
+            self.mesh_refinements = mesh_refinements
 
         def visualize(self, U, m, title='', legend=None, filename=None, block=True,
                       separate_colorbars=True):
@@ -258,11 +262,21 @@ if config.HAVE_FENICS:
                 assert not isinstance(U, tuple)
                 assert U in self.space
                 f = df.File(filename)
-                function = df.Function(self.space.V)
+                coarse_function = df.Function(self.space.V)
+                if self.mesh_refinements:
+                    mesh = self.space.V.mesh()
+                    for _ in range(self.mesh_refinements):
+                        mesh = df.refine(mesh)
+                    V_fine = df.FunctionSpace(mesh, self.space.V.ufl_element())
+                    function = df.Function(V_fine)
+                else:
+                    function = coarse_function
                 if legend:
                     function.rename(legend, legend)
                 for u in U._list:
-                    function.vector()[:] = u.impl
+                    coarse_function.vector()[:] = u.impl
+                    if self.mesh_refinements:
+                        function.vector()[:] = df.interpolate(coarse_function, V_fine).vector()
                     f << function
             else:
                 from matplotlib import pyplot as plt
