@@ -64,9 +64,12 @@ if config.HAVE_FENICS:
                 return np.array([], dtype=np.intc)
             assert 0 <= np.min(component_indices)
             assert np.max(component_indices) < self.impl.size()
-            x = df.Vector()
-            self.impl.gather(x, component_indices)
-            return x.array()
+            try:
+                x = df.Vector()
+                self.impl.gather(x, component_indices)
+                return x.array()
+            except RuntimeError:
+                return self.impl[component_indices]
 
         def amax(self):
             A = np.abs(self.impl.array())
