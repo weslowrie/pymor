@@ -52,7 +52,10 @@ class NumpyVectorArray(VectorArrayInterface):
         return self._len
 
     def __getitem__(self, ind):
-        return NumpyVectorArrayView(self, ind)
+        try:
+            return NumpyVectorArrayView(self, ind)
+        except Exception as e:
+            raise IndexError(e)
 
     def __delitem__(self, ind):
         assert self.check_ind(ind)
@@ -427,7 +430,10 @@ class NumpyVectorArrayView(NumpyVectorArray):
         return self.base.len_ind(self.ind)
 
     def __getitem__(self, ind):
-        return self.base[self.base.sub_index(self.ind, ind)]
+        try:
+            return self.base[self.base.sub_index(self.ind, ind)]
+        except Exception as e:
+            raise IndexError(e)
 
     def __delitem__(self):
         raise ValueError('Cannot remove from NumpyVectorArrayView')

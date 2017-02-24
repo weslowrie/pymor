@@ -242,7 +242,10 @@ class ListVectorArray(VectorArrayInterface):
         return len(self._list)
 
     def __getitem__(self, ind):
-        return ListVectorArrayView(self, ind)
+        try:
+            return ListVectorArrayView(self, ind)
+        except Exception as e:
+            raise IndexError(e)
 
     def __delitem__(self, ind):
         assert self.check_ind(ind)
