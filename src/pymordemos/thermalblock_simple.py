@@ -135,6 +135,117 @@ def _discretize_fenics():
     return d
 
 
+def discretize_dunegdt():
+
+    from itertools import product
+    from pymor.core.config import config
+    import numpy as np
+
+    assert config.HAVE_DUNEXT
+    assert config.HAVE_DUNEGDT
+
+    # assemble system matrices - dune-gdt code
+    ##########################################
+
+    from dune.xt.common import init_mpi
+    init_mpi()
+
+    from dune.xt.grid import HAVE_DUNE_ALUGRID
+    assert HAVE_DUNE_ALUGRID
+    from dune.xt.grid import make_cube_grid__2d_simplex_aluconform, make_boundary_info
+    grid = make_cube_grid__2d_simplex_aluconform(lower_left=[0, 0], upper_right=[1, 1],
+                                                 num_elements=[GRID_INTERVALS, GRID_INTERVALS],
+                                                 num_refinements=1, overlap_size=[0, 0])
+    boundary_info = make_boundary_info(grid, 'xt.grid.boundaryinfo.alldirichlet')
+
+    from dune.xt.functions import make_checkerboard_function_1x1, make_constant_function_1x1
+
+    def diffusion_function_factory(ix, iy):
+        values = [[0.]]*(YBLOCKS*XBLOCKS)
+        values[ix + XBLOCKS*iy] = [1.]
+        return make_checkerboard_function_1x1(grid_provider=grid, lower_left=[0, 0], upper_right=[1, 1],
+                                              num_elements=[XBLOCKS, YBLOCKS],
+                                              values=values, name='diffusion_{}_{}'.format(ix, iy))
+
+    diffusion_functions = [diffusion_function_factory(ix, iy)
+                           for ix, iy in product(range(XBLOCKS), range(YBLOCKS))]
+    one = make_constant_function_1x1(grid, 1.)
+
+    from dune.gdt import HAVE_DUNE_FEM
+    assert HAVE_DUNE_FEM
+    from dune.gdt import (make_cg_leaf_to_1x1_fem_p1_space,
+                          make_elliptic_matrix_operator_istl_row_major_sparse_matrix_double,
+                          make_dirichlet_constraints,
+                          make_l2_volume_vector_functional_istl_dense_vector_double,
+                          make_system_assembler,
+                          HAVE_DUNE_FEM)
+
+    space = make_cg_leaf_to_1x1_fem_p1_space(grid)
+    system_assembler = make_system_assembler(space)
+
+    from dune.xt.la import HAVE_DUNE_ISTL
+    assert HAVE_DUNE_ISTL
+    from dune.xt.la import IstlDenseVectorDouble
+
+    elliptic_operators = [make_elliptic_matrix_operator_istl_row_major_sparse_matrix_double(diffusion_function, space)
+                          for diffusion_function in diffusion_functions]
+    for op in elliptic_operators:
+        system_assembler.append(op)
+
+    l2_force_functional = make_l2_volume_vector_functional_istl_dense_vector_double(one, space)
+    system_assembler.append(l2_force_functional)
+
+    h1_product_operator = make_elliptic_matrix_operator_istl_row_major_sparse_matrix_double(one, space)
+    system_assembler.append(h1_product_operator)
+
+    clear_dirichlet_rows = make_dirichlet_constraints(boundary_info, space.size(), False)
+    set_dirichlet_rows = make_dirichlet_constraints(boundary_info, space.size(), True)
+    system_assembler.append(clear_dirichlet_rows)
+    system_assembler.append(set_dirichlet_rows)
+
+    system_assembler.assemble()
+
+    rhs_vector = l2_force_functional.vector()
+    lhs_matrices = [op.matrix() for op in elliptic_operators]
+    for mat in lhs_matrices:
+        clear_dirichlet_rows.apply(mat)
+    lhs_matrices.append(lhs_matrices[0].copy())
+    lhs_matrices[-1].scal(0)
+    set_dirichlet_rows.apply(lhs_matrices[-1])
+    h1_0_matrix = h1_product_operator.matrix()
+    set_dirichlet_rows.apply(h1_0_matrix)
+    set_dirichlet_rows.apply(rhs_vector)
+
+    # wrap everything as a pyMOR discretization
+    ###########################################
+
+    # dune-xt-la wrappers
+    from pymor.bindings.dunext import DuneXTVectorSpace, DuneXTMatrixOperator
+    # dune-gdt wrappers
+    from pymor.bindings.dunegdt import DuneGDTVisualizer, DuneGDTpyMORVisualizerWrapper
+
+    # define parameter functionals (same as in pymor.analyticalproblems.thermalblock)
+    parameter_functionals = [ProjectionParameterFunctional(component_name='diffusion',
+                                                           component_shape=(YBLOCKS, XBLOCKS),
+                                                           coordinates=(YBLOCKS - y - 1, x))
+                             for x in range(XBLOCKS) for y in range(YBLOCKS)]
+
+    # wrap operators
+    ops = [DuneXTMatrixOperator(mat) for mat in lhs_matrices]
+    op = LincombOperator(ops, parameter_functionals + [1.])
+    rhs = VectorFunctional(DuneXTVectorSpace(IstlDenseVectorDouble, space.size()).make_array([rhs_vector]))
+    h1_product = DuneXTMatrixOperator(h1_0_matrix, name='h1_0_semi')
+
+    # build visualizer and discretization
+    visualizer = DuneGDTVisualizer(space)
+    parameter_space = CubicParameterSpace(op.parameter_type, 0.1, 1.)
+    d = StationaryDiscretization(op, rhs, products={'h1_0_semi': h1_product},
+                                 parameter_space=parameter_space,
+                                 visualizer=visualizer)
+
+    return d
+
+
 ####################################################################################################
 # Reduction algorithms                                                                             #
 ####################################################################################################
@@ -213,6 +324,8 @@ def main():
         d = discretize_pymor()
     elif MODEL == 'fenics':
         d = discretize_fenics()
+    elif MODEL == 'dunegdt':
+        d = discretize_dunegdt()
     else:
         raise NotImplementedError
 
