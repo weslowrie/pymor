@@ -96,16 +96,16 @@ if config.HAVE_DUNEXT:
         return U
 
     def dunext_common_vector_array_factory(length, dim, seed):
-        from dune.xt.la import CommonDenseVector_double
+        from dune.xt.la import CommonDenseVectorDouble
         return _dunext_vector_array_factory(CommonDenseVector_double, length, dim, seed)
 
     if dune.xt.la.HAVE_DUNE_ISTL:
-        from dune.xt.la import IstlDenseVector_double
+        from dune.xt.la import IstlDenseVectorDouble
         def dunext_istl_vector_array_factory(length, dim, seed):
             return _dunext_vector_array_factory(IstlDenseVector_double, length, dim, seed)
 
     if dune.xt.la.HAVE_EIGEN:
-        from dune.xt.la import EigenDenseVector_double
+        from dune.xt.la import EigenDenseVectorDouble
         def dunext_eigen_vector_array_factory(length, dim, seed):
             return _dunext_vector_array_factory(EigenDenseVector_double, length, dim, seed)
 
