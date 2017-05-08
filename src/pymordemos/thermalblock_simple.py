@@ -9,7 +9,7 @@ Usage:
   thermalblock_simple.py [options] MODEL ALG SNAPSHOTS RBSIZE TEST
 
 Arguments:
-  MODEL      High-dimensional model (pymor, fenics).
+  MODEL      High-dimensional model (pymor, dunegdt, fenics).
 
   ALG        The model reduction algorithm to use
              (naive, greedy, adaptive_greedy, pod).
