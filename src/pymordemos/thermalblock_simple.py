@@ -152,10 +152,11 @@ def discretize_dunegdt():
 
     from dune.xt.grid import HAVE_DUNE_ALUGRID
     assert HAVE_DUNE_ALUGRID
-    from dune.xt.grid import make_cube_grid__2d_simplex_aluconform, make_boundary_info
-    grid = make_cube_grid__2d_simplex_aluconform(lower_left=[0, 0], upper_right=[1, 1],
-                                                 num_elements=[GRID_INTERVALS, GRID_INTERVALS],
-                                                 num_refinements=1, overlap_size=[0, 0])
+    from dune.xt.grid import (make_cube_grid__2d_simplex_aluconform as make_cube_grid,
+                              make_boundary_info_on_leaf_layer as make_boundary_info)
+    grid = make_cube_grid(lower_left=[0, 0], upper_right=[1, 1],
+                          num_elements=[GRID_INTERVALS, GRID_INTERVALS],
+                          num_refinements=1, overlap_size=[0, 0])
     boundary_info = make_boundary_info(grid, 'xt.grid.boundaryinfo.alldirichlet')
 
     from dune.xt.functions import make_checkerboard_function_1x1, make_constant_function_1x1
@@ -173,14 +174,14 @@ def discretize_dunegdt():
 
     from dune.gdt import HAVE_DUNE_FEM
     assert HAVE_DUNE_FEM
-    from dune.gdt import (make_cg_leaf_to_1x1_fem_p1_space,
+    from dune.gdt import (make_cg_leaf_part_to_1x1_fem_p1_space as make_space,
                           make_elliptic_matrix_operator_istl_row_major_sparse_matrix_double,
                           make_dirichlet_constraints,
                           make_l2_volume_vector_functional_istl_dense_vector_double,
                           make_system_assembler,
                           HAVE_DUNE_FEM)
 
-    space = make_cg_leaf_to_1x1_fem_p1_space(grid)
+    space = make_space(grid)
     system_assembler = make_system_assembler(space)
 
     from dune.xt.la import HAVE_DUNE_ISTL
