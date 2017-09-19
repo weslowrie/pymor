@@ -111,11 +111,12 @@ if config.HAVE_NGSOLVE:
 
         linear = True
 
-        def __init__(self, matrix, range, source, solver_options=None, name=None):
+        def __init__(self, matrix, range, source, solver_options=None, free_dofs=None, name=None):
             self.range = range
             self.source = source
             self.matrix = matrix
             self.solver_options = solver_options
+            self.free_dofs = free_dofs
             self.name = name
 
         def apply(self, U, mu=None):
@@ -141,7 +142,7 @@ if config.HAVE_NGSOLVE:
             solver = self.solver_options.get('inverse', default_solver) if self.solver_options else default_solver
             R = self.source.zeros(len(V))
             with ngs.TaskManager():
-                inv = self.matrix.Inverse(self.source.V.FreeDofs(), inverse=solver)
+                inv = self.matrix.Inverse(self.free_dofs or self.source.V.FreeDofs(), inverse=solver)
                 for r, v in zip(R._list, V._list):
                     r.impl.vec.data = inv * v.impl.vec
             return R
