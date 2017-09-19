@@ -100,6 +100,11 @@ if config.HAVE_NGSOLVE:
         def make_vector(self, obj):
             return NGSolveVector(obj)
 
+        def vector_from_data(self, data):
+            v = self.zero_vector()
+            v.data[:] = data
+            return v
+
 
     class NGSolveMatrixOperator(OperatorBase):
         """Wraps a NGSolve matrix as an |Operator|."""
