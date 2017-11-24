@@ -15,8 +15,8 @@ def _pyside(rev, marker=True):
 _QT_COMMENT = 'solution visualization for builtin discretizations'
 _PYTEST = 'pytest>=3.2'
 tests_require = [_PYTEST, 'pytest-cov', 'envparse', 'docker']
-install_requires = ['cython>=0.20.1', 'numpy>=1.8.1', 'scipy>=0.13.3', 'Sphinx>=1.4.0', 'docopt', 'Qt.py>=1.0.0b3']
-setup_requires = ['pytest-runner>=2.9', 'cython>=0.20.1', 'numpy>=1.8.1']
+install_requires = ['cython>=0.20.1', 'numpy>=1.8.1', 'scipy>=0.13.3', 'Sphinx>=1.4.0', 'docopt', 'Qt.py>=1.0.0b3', 'packaging']
+setup_requires = ['pytest-runner>=2.9', 'cython>=0.20.1', 'numpy>=1.8.1', 'packaging']
 install_suggests = {'ipython>=3.0': 'an enhanced interactive python shell',
                     'ipyparallel': 'required for pymor.parallel.ipython',
                     'matplotlib': 'needed for error plots in demo scipts',
@@ -95,21 +95,6 @@ def extras():
         'full':  full,
         'travis':  travis_requires,
     }
-
-
-def missing(names):
-    for name in names:
-        stripped_name = strip_markers(name)
-        try:
-            __import__(stripped_name)
-        except ImportError:
-            if stripped_name in import_names:
-                try:
-                    __import__(import_names[stripped_name])
-                except ImportError:
-                    yield name, import_names[stripped_name]
-            else:
-                yield name, stripped_name
 
 
 if __name__ == '__main__':
