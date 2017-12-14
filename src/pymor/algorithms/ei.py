@@ -86,6 +86,8 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
 
     interpolation_dofs = np.zeros((0,), dtype=np.int32)
     collateral_basis = U.empty()
+    coefficients = np.eye(len(U))
+    basis_coefficients = np.zeros((0, len(U)))
     max_errs = []
     triangularity_errs = []
 
@@ -131,11 +133,13 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
         new_vec *= 1 / new_dof_value
         interpolation_dofs = np.hstack((interpolation_dofs, new_dof))
         collateral_basis.append(new_vec)
+        basis_coefficients = np.vstack([basis_coefficients, coefficients[max_err_ind] / new_dof_value])
         max_errs.append(max_err)
 
         # update U and ERR
         new_dof_values = U.dofs([new_dof])
         U.axpy(-new_dof_values[:, 0], new_vec)
+        coefficients -= (coefficients[max_err_ind] / new_dof_value) * new_dof_values
         errs = ERR.l2_norm() if error_norm is None else error_norm(ERR)
         max_err_ind = np.argmax(errs)
         max_err = errs[max_err_ind]
@@ -149,7 +153,8 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
         logger.info('Interpolation matrix is not lower triangular with maximum error of {}'
                     .format(triangularity_errs[-1]))
 
-    data = {'errors': max_errs, 'triangularity_errors': triangularity_errs}
+    data = {'errors': max_errs, 'triangularity_errors': triangularity_errs,
+            'coefficients': basis_coefficients}
 
     return interpolation_dofs, collateral_basis, data
 
