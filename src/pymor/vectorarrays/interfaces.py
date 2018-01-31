@@ -508,6 +508,12 @@ class VectorArrayInterface(BasicInterface):
             else:
                 return [ind[ind_ind]]
 
+    def __copy__(self):
+        return self.copy()
+
+    def __deepcopy__(self, memo):
+        return self.copy(deep=True)
+
 
 class VectorSpaceInterface(ImmutableInterface):
     """Class describing a vector space.
