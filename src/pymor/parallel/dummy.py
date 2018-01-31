@@ -2,6 +2,7 @@
 # Copyright 2013-2017 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
+from copy import deepcopy
 from numbers import Number
 
 from pymor.core.interfaces import ImmutableInterface
@@ -62,7 +63,7 @@ class DummyPool(WorkerPoolBase):
         return result
 
     def _copy(self, obj):
-        return loads(dumps(obj))
+        return deepcopy(obj)
 
 
 dummy_pool = DummyPool()
