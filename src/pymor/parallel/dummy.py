@@ -25,8 +25,8 @@ class DummyPool(WorkerPoolBase):
     def _remove(self, remote_resource):
         pass
 
-    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
-        assert worker is None or (not store and not scatter)
+    def _apply(self, function, *args, store=False, worker=None, **kwargs):
+        assert worker is None or not store
 
         if worker is None:
             worker, single_worker = range(self.size), False
@@ -37,33 +37,29 @@ class DummyPool(WorkerPoolBase):
 
         result = []
 
-        if scatter:
-            args = zip(*args) if args else [()] * len(worker)
-        else:
-            args = [args] * len(worker)
-
-        for worker_id, worker_args in zip(worker, args):
+        for worker_id in worker:
             if isinstance(function, RemoteResourceWithPath):
                 f = function.resolve_path(function.remote_resource[worker_id])
             else:
                 f = function
 
-            worker_args = [(v if isinstance(v, ImmutableInterface) else
-                            v.resolve_path(v.remote_resource[worker_id]) if isinstance(v, RemoteResourceWithPath) else
-                            self._copy(v)) for v in worker_args]
-            worker_kargs = {k: (v if isinstance(v, ImmutableInterface) else
-                                v.resolve_path(v.remote_resource[worker_id]) if isinstance(v, RemoteResourceWithPath) else
-                                self._copy(v)) for k, v in kwargs.items()}
+            worker_args = [(v.resolve_path(v.remote_resource[worker_id]) if isinstance(v, RemoteResourceWithPath) else
+                            self._copy(v)) for v in args]
+            worker_kwargs = {k: (v.resolve_path(v.remote_resource[worker_id]) if isinstance(v, RemoteResourceWithPath) else
+                                 self._copy(v)) for k, v in kwargs.items()}
 
-            result.append(f(*worker_args, **worker_kargs))
+            result.append(f(*worker_args, **worker_kwargs))
 
         if single_worker:
             result = result[0]
 
         return result
 
+    def _scatter(self, l):
+        return [self._copy(x) for x in l]
+
     def _copy(self, obj):
-        return deepcopy(obj)
+        return obj if isinstance(obj, ImmutableInterface) else deepcopy(obj)
 
 
 dummy_pool = DummyPool()

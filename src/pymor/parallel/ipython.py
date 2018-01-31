@@ -154,11 +154,16 @@ class IPythonPool(WorkerPoolBase):
     def __len__(self):
         return len(self.view)
 
+    def _scatter(self, l):
+        remote_resource = self._remote_objects_created.inc()
+        self.view.map_sync(_store, l, [remote_resource] * len(self))
+        return remote_resource
+
     def _remove(self, remote_resource):
         self.view.apply(_remove_object, remote_resource)
 
-    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
-        assert worker is None or (not store and not scatter)
+    def _apply(self, function, *args, store=False, worker=None, **kwargs):
+        assert worker is None or not store
 
         if worker is None:
             view = self.view
@@ -172,11 +177,7 @@ class IPythonPool(WorkerPoolBase):
         else:
             remote_resource = None
 
-        if scatter:
-            result = view.map_sync(_worker_call_function, *zip(*((function, a, kwargs, remote_resource)
-                                                                 for a in zip(*args))))
-        else:
-            result = view.apply_sync(_worker_call_function, function, args, kwargs, remote_resource)
+        result = view.apply_sync(_worker_call_function, function, args, kwargs, remote_resource)
 
         if store:
             return remote_resource
@@ -192,6 +193,10 @@ def _setup_worker():
 def _remove_object(remote_resource):
     global _remote_objects
     del _remote_objects[remote_resource]
+
+
+def _store(obj, remote_resource):
+    _remote_objects[remote_resource] = obj
 
 
 def _worker_call_function(function, args, kwargs, remote_resource):
@@ -210,5 +215,6 @@ def _worker_call_function(function, args, kwargs, remote_resource):
     result = function(*args, **kwargs)
     if remote_resource is not None:
         _remote_objects[remote_resource] = result
-
-    return result
+        return None
+    else:
+        return result

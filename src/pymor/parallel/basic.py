@@ -19,7 +19,11 @@ class WorkerPoolBase(WorkerPoolInterface):
         self._pushed_immutable_objects = weakref.WeakValueDictionary()
 
     @abstractmethod
-    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
+    def _apply(self, function, *args, store=False, worker=None, **kwargs):
+        pass
+
+    @abstractmethod
+    def _scatter(self, l):
         pass
 
     @abstractmethod
@@ -52,24 +56,8 @@ class WorkerPoolBase(WorkerPoolInterface):
         return result
 
     def map(self, function, *args, **kwargs):
-        function, args, kwargs = self._map_args(function, args, kwargs, True)
-
-        # split arguments into chunks
-        num_chunks = len(self)
-        lens = list(map(len, args))
-        assert len(set(lens)) == 1
-        arg_count = lens[0]
-        chunk_size = arg_count // num_chunks + (1 if arg_count % num_chunks > 0 else 0)
-
-        def split_arg(arg):
-            for _ in range(num_chunks):
-                chunk, arg = arg[:chunk_size], arg[chunk_size:]
-                yield chunk
-        for arg in args:
-            assert list(chain(*split_arg(arg))) == arg
-        chunks = tuple(list(split_arg(arg)) for arg in args)
-
-        results = self.apply(_map, *chunks, f=function, scatter=True, **kwargs)
+        assert len(set(len(a) for a in args)) == 1
+        results = self.apply(_map, self.scatter(list(zip(*args))), f=function, **kwargs)
         results = list(chain(*results))
         return results
 
@@ -78,9 +66,11 @@ class WorkerPoolBase(WorkerPoolInterface):
         slices = []
         for i in range(len(self)):
             slices.append(l[i*slice_len:(i+1)*slice_len])
-        remote_l = self.push(l.empty() if isinstance(l, VectorArrayInterface) else [])
-        self.map(_append_list_slice, slices, l=remote_l)
-        return remote_l
+        remote_resource = self._scatter(slices)
+        remote_object = RemoteObject(self, remote_resource)
+        self.remote_objects.add(remote_object)
+        weakref.finalize(remote_object, self._remove, remote_resource)
+        return remote_object
 
     def _map_args(self, function, args, kwargs, scatter=False):
 
@@ -123,17 +113,10 @@ class RemoteResourceWithPath:
         return o
 
 
-def _append_list_slice(s, l=None):
-    if isinstance(l, VectorArrayInterface):
-        l.append(s)
-    else:
-        l.extend(s)
-
-
 def _identity(obj):
     return obj
 
 
-def _map(*chunks, f=None, **kwargs):
-    result = [f(*args, **kwargs) for args in zip(*chunks)]
+def _map(chunks, f=None, **kwargs):
+    result = [f(*args, **kwargs) for args in chunks]
     return result

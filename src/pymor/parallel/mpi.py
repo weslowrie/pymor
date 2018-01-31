@@ -24,14 +24,14 @@ class MPIPool(WorkerPoolBase):
     def __len__(self):
         return mpi.size
 
-    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
-        assert worker is None or (not store and not scatter)
+    def _apply(self, function, *args, store=False, worker=None, **kwargs):
+        assert worker is None or not store
 
         payload = mpi.get_object(self._payload)
 
         payload[0] = (function, args, kwargs)
         if worker is None:
-            result = mpi.call(_worker_call_function, store, scatter, payload)
+            result = mpi.call(_worker_call_function, store, payload)
         else:
             result = mpi.call(_single_worker_call_function,
                               [worker] if isinstance(worker, Number) else worker,
@@ -42,6 +42,13 @@ class MPIPool(WorkerPoolBase):
 
         return result
 
+    def _scatter(self, l):
+        payload = mpi.get_object(self._payload)
+        payload[0] = l
+        remote_resource = mpi.call(_store, payload)
+        payload[0] = None
+        return remote_resource
+
     def _remove(self, remote_resource):
         mpi.call(mpi.remove_object, remote_resource)
 
@@ -50,12 +57,13 @@ def _setup_worker():
     return [None]
 
 
-def _worker_call_function(store, scatter, payload):
-    if scatter:
-        function, kwargs = mpi.comm.bcast((payload[0][0], payload[0][2]) if mpi.rank0 else None, root=0)
-        args = mpi.comm.scatter(zip(*payload[0][1]) if mpi.rank0 else None, root=0)
-    else:
-        function, args, kwargs = mpi.comm.bcast(payload[0] if mpi.rank0 else None, root=0)
+def _store(payload):
+    obj = mpi.comm.scatter(payload[0] if mpi.rank0 else None, root=0)
+    return mpi.manage_object(obj)
+
+
+def _worker_call_function(store, payload):
+    function, args, kwargs = mpi.comm.bcast(payload[0] if mpi.rank0 else None, root=0)
 
     result = _eval_function(function, args, kwargs)
 
