@@ -19,13 +19,12 @@ from pymor.core.logger import getLogger
 from pymor.algorithms.pod import pod
 from pymor.operators.ei import EmpiricalInterpolatedOperator
 from pymor.parallel.dummy import dummy_pool
-from pymor.parallel.interfaces import RemoteObjectInterface
-from pymor.parallel.manager import RemoteObjectManager
+from pymor.parallel.interfaces import RemoteObject
 from pymor.vectorarrays.interfaces import VectorArrayInterface
 
 
 def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=None,
-              copy=True, pool=dummy_pool):
+              copy=True, pool=None):
     """Generate data for empirical interpolation using EI-Greedy algorithm.
 
     Given a |VectorArray| `U`, this method generates a collateral basis and
@@ -72,12 +71,11 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
     """
 
     if pool:  # dispatch to parallel implemenation
-        assert isinstance(U, (VectorArrayInterface, RemoteObjectInterface))
-        with RemoteObjectManager() as rom:
-            if isinstance(U, VectorArrayInterface):
-                U = rom.manage(pool.scatter_array(U))
-            return _parallel_ei_greedy(U, error_norm=error_norm, atol=atol, rtol=rtol,
-                                       max_interpolation_dofs=max_interpolation_dofs, copy=copy, pool=pool)
+        assert isinstance(U, (VectorArrayInterface, RemoteObject))
+        if isinstance(U, VectorArrayInterface):
+            U = pool.scatter(U)
+        return _parallel_ei_greedy(U, error_norm=error_norm, atol=atol, rtol=rtol,
+                                   max_interpolation_dofs=max_interpolation_dofs, copy=copy, pool=pool)
 
     assert isinstance(U, VectorArrayInterface)
 
@@ -238,7 +236,7 @@ def deim(U, modes=None, error_norm=None, product=None):
 
 
 def interpolate_operators(d, operator_names, parameter_sample, error_norm=None,
-                          atol=None, rtol=None, max_interpolation_dofs=None, pool=dummy_pool):
+                          atol=None, rtol=None, max_interpolation_dofs=None, pool=None):
     """Empirical operator interpolation using the EI-Greedy algorithm.
 
     This is a convenience method to facilitate the use of :func:`ei_greedy`. Given
@@ -288,25 +286,24 @@ def interpolate_operators(d, operator_names, parameter_sample, error_norm=None,
     """
 
     logger = getLogger('pymor.algorithms.ei.interpolate_operators')
-    with RemoteObjectManager() as rom:
-        operators = [d.operators[operator_name] for operator_name in operator_names]
-        with logger.block('Computing operator evaluations on solution snapshots ...'):
-            if pool:
-                logger.info('Using pool of {} workers for parallel evaluation'.format(len(pool)))
-                evaluations = rom.manage(pool.push(d.solution_space.empty()))
-                pool.map(_interpolate_operators_build_evaluations, parameter_sample,
-                         d=d, operators=operators, evaluations=evaluations)
-            else:
-                evaluations = operators[0].range.empty()
-                for mu in parameter_sample:
-                    U = d.solve(mu)
-                    for op in operators:
-                        evaluations.append(op.apply(U, mu=mu))
+    operators = [d.operators[operator_name] for operator_name in operator_names]
+    with logger.block('Computing operator evaluations on solution snapshots ...'):
+        if pool:
+            logger.info('Using pool of {} workers for parallel evaluation'.format(len(pool)))
+            evaluations = pool.push(d.solution_space.empty())
+            pool.map(_interpolate_operators_build_evaluations, parameter_sample,
+                     d=d, operators=operators, evaluations=evaluations)
+        else:
+            evaluations = operators[0].range.empty()
+            for mu in parameter_sample:
+                U = d.solve(mu)
+                for op in operators:
+                    evaluations.append(op.apply(U, mu=mu))
 
-        with logger.block('Performing EI-Greedy:'):
-            dofs, basis, data = ei_greedy(evaluations, error_norm, atol=atol, rtol=rtol,
-                                          max_interpolation_dofs=max_interpolation_dofs,
-                                          copy=False, pool=pool)
+    with logger.block('Performing EI-Greedy:'):
+        dofs, basis, data = ei_greedy(evaluations, error_norm, atol=atol, rtol=rtol,
+                                      max_interpolation_dofs=max_interpolation_dofs,
+                                      copy=False, pool=pool)
 
     ei_operators = {name: EmpiricalInterpolatedOperator(operator, dofs, basis, triangular=True)
                     for name, operator in zip(operator_names, operators)}
@@ -326,62 +323,61 @@ def _interpolate_operators_build_evaluations(mu, d=None, operators=None, evaluat
 
 def _parallel_ei_greedy(U, pool, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=None, copy=True):
 
-    assert isinstance(U, RemoteObjectInterface)
+    assert isinstance(U, RemoteObject)
 
     logger = getLogger('pymor.algorithms.ei.ei_greedy')
     logger.info('Generating Interpolation Data ...')
     logger.info('Using pool of {} workers for parallel greedy search'.format(len(pool)))
 
     interpolation_dofs = np.zeros((0,), dtype=np.int32)
-    collateral_basis = pool.apply_only(_parallel_ei_greedy_get_empty, 0, U=U)
+    collateral_basis = U.space.get(worker=0).empty()
     max_errs = []
     triangularity_errs = []
 
-    with pool.push({}) as distributed_data:
-        errs = pool.apply(_parallel_ei_greedy_initialize,
-                          U=U, error_norm=error_norm, copy=copy, data=distributed_data)
-        max_err_ind = np.argmax(errs)
-        initial_max_err = max_err = errs[max_err_ind]
+    workers = pool.apply(_EIGreedyWorker, U=U, error_norm=error_norm, copy=copy, store=True)
+    errs = workers.compute_errors()
+    max_err_ind = np.argmax(errs)
+    initial_max_err = max_err = errs[max_err_ind]
 
-        # main loop
-        while True:
+    # main loop
+    while True:
 
-            if max_interpolation_dofs is not None and len(interpolation_dofs) >= max_interpolation_dofs:
-                logger.info('Maximum number of interpolation DOFs reached. Stopping extension loop.')
-                logger.info('Final maximum interpolation error with {} interpolation DOFs: {}'
-                            .format(len(interpolation_dofs), max_err))
-                break
-
-            logger.info('Maximum interpolation error with {} interpolation DOFs: {}'
+        if max_interpolation_dofs is not None and len(interpolation_dofs) >= max_interpolation_dofs:
+            logger.info('Maximum number of interpolation DOFs reached. Stopping extension loop.')
+            logger.info('Final maximum interpolation error with {} interpolation DOFs: {}'
                         .format(len(interpolation_dofs), max_err))
+            break
 
-            if atol is not None and max_err <= atol:
-                logger.info('Absolute error tolerance reached! Stopping extension loop.')
-                break
+        logger.info('Maximum interpolation error with {} interpolation DOFs: {}'
+                    .format(len(interpolation_dofs), max_err))
 
-            if rtol is not None and max_err / initial_max_err <= rtol:
-                logger.info('Relative error tolerance reached! Stopping extension loop.')
-                break
+        if atol is not None and max_err <= atol:
+            logger.info('Absolute error tolerance reached! Stopping extension loop.')
+            break
 
-            # compute new interpolation dof and collateral basis vector
-            new_vec = pool.apply_only(_parallel_ei_greedy_get_vector, max_err_ind, data=distributed_data)
-            new_dof = new_vec.amax()[0][0]
-            if new_dof in interpolation_dofs:
-                logger.info('DOF {} selected twice for interplation! Stopping extension loop.'.format(new_dof))
-                break
-            new_dof_value = new_vec.dofs([new_dof])[0, 0]
-            if new_dof_value == 0.:
-                logger.info('DOF {} selected for interpolation has zero maximum error! Stopping extension loop.'
-                            .format(new_dof))
-                break
-            new_vec *= 1 / new_dof_value
-            interpolation_dofs = np.hstack((interpolation_dofs, new_dof))
-            collateral_basis.append(new_vec)
-            max_errs.append(max_err)
+        if rtol is not None and max_err / initial_max_err <= rtol:
+            logger.info('Relative error tolerance reached! Stopping extension loop.')
+            break
 
-            errs = pool.apply(_parallel_ei_greedy_update, new_vec=new_vec, new_dof=new_dof, data=distributed_data)
-            max_err_ind = np.argmax(errs)
-            max_err = errs[max_err_ind]
+        # compute new interpolation dof and collateral basis vector
+        new_vec = workers.get_vector(worker=max_err_ind)
+        new_dof = new_vec.amax()[0][0]
+        if new_dof in interpolation_dofs:
+            logger.info('DOF {} selected twice for interplation! Stopping extension loop.'.format(new_dof))
+            break
+        new_dof_value = new_vec.dofs([new_dof])[0, 0]
+        if new_dof_value == 0.:
+            logger.info('DOF {} selected for interpolation has zero maximum error! Stopping extension loop.'
+                        .format(new_dof))
+            break
+        new_vec *= 1 / new_dof_value
+        interpolation_dofs = np.hstack((interpolation_dofs, new_dof))
+        collateral_basis.append(new_vec)
+        max_errs.append(max_err)
+
+        errs = workers.update(new_vec, new_dof)
+        max_err_ind = np.argmax(errs)
+        max_err = errs[max_err_ind]
 
     interpolation_matrix = collateral_basis.dofs(interpolation_dofs).T
     triangularity_errors = np.abs(interpolation_matrix - np.tril(interpolation_matrix))
@@ -391,38 +387,28 @@ def _parallel_ei_greedy(U, pool, error_norm=None, atol=None, rtol=None, max_inte
     if len(triangularity_errs) > 0:
         logger.info('Interpolation matrix is not lower triangular with maximum error of {}'
                     .format(triangularity_errs[-1]))
-        logger.info('')
 
     data = {'errors': max_errs, 'triangularity_errors': triangularity_errs}
 
     return interpolation_dofs, collateral_basis, data
 
 
-def _parallel_ei_greedy_get_empty(U=None):
-    return U.empty()
+class _EIGreedyWorker:
 
+    def __init__(self, U, error_norm, copy):
+        self.U, self.error_norm = U.copy() if copy else U, error_norm
 
-def _parallel_ei_greedy_initialize(U=None, error_norm=None, copy=None, data=None):
-    if copy:
-        U = U.copy()
-    data['U'] = U
-    data['error_norm'] = error_norm
-    errs = U.l2_norm() if error_norm is None else error_norm(U)
-    data['max_err_ind'] = max_err_ind = np.argmax(errs)
-    return errs[max_err_ind]
+    def compute_errors(self):
+        if len(self.U) == 0:
+            return 0.
+        errs = self.U.l2_norm() if self.error_norm is None else self.error_norm(self.U)
+        self.max_err_ind = np.argmax(errs)
+        return errs[self.max_err_ind]
 
+    def get_vector(self):
+        return self.U[self.max_err_ind].copy()
 
-def _parallel_ei_greedy_get_vector(data=None):
-    return data['U'][data['max_err_ind']].copy()
-
-
-def _parallel_ei_greedy_update(new_vec=None, new_dof=None, data=None):
-    U = data['U']
-    error_norm = data['error_norm']
-
-    new_dof_values = U.dofs([new_dof])
-    U.axpy(-new_dof_values[:, 0], new_vec)
-
-    errs = U.l2_norm() if error_norm is None else error_norm(U)
-    data['max_err_ind'] = max_err_ind = np.argmax(errs)
-    return errs[max_err_ind]
+    def update(self, new_vec, new_dof):
+        new_dof_values = self.U.dofs([new_dof])
+        self.U.axpy(-new_dof_values[:, 0], new_vec)
+        return self.compute_errors()

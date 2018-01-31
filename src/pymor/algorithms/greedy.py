@@ -9,11 +9,10 @@ import numpy as np
 from pymor.core.exceptions import ExtensionError
 from pymor.core.logger import getLogger
 from pymor.parallel.dummy import dummy_pool
-from pymor.parallel.manager import RemoteObjectManager
 
 
 def greedy(d, reductor, samples, use_estimator=True, error_norm=None,
-           atol=None, rtol=None, max_extensions=None, extension_params=None, pool=None):
+           atol=None, rtol=None, max_extensions=None, extension_params=None, pool=dummy_pool):
     """Greedy basis generation algorithm.
 
     This algorithm generates a reduced basis by iteratively adding the
@@ -56,7 +55,7 @@ def greedy(d, reductor, samples, use_estimator=True, error_norm=None,
     extension_params
         `dict` of parameters passed to the `reductor.extend_basis` method.
     pool
-        If not `None`, the |WorkerPool| to use for parallelization.
+        The |WorkerPool| to use for parallelization.
 
     Returns
     -------
@@ -77,80 +76,76 @@ def greedy(d, reductor, samples, use_estimator=True, error_norm=None,
     sample_count = len(samples)
     extension_params = extension_params or {}
     logger.info('Started greedy search on {} samples'.format(sample_count))
-    if pool is None or pool is dummy_pool:
-        pool = dummy_pool
-    else:
+    if pool:
         logger.info('Using pool of {} workers for parallel greedy search'.format(len(pool)))
 
-    with RemoteObjectManager() as rom:
-        # Push everything we need during the greedy search to the workers.
-        # Distribute the training set evenly among the workes.
-        if not use_estimator:
-            rom.manage(pool.push(d))
-            if error_norm:
-                rom.manage(pool.push(error_norm))
-        samples = rom.manage(pool.scatter_list(samples))
+    # Push everything we need during the greedy search to the workers.
+    # Distribute the training set evenly among the workes.
+    if not use_estimator:
+        d_r = pool.push(d)
+        error_norm_r = pool.push(error_norm) if error_norm else None
+    samples = pool.scatter(samples)
 
-        tic = time.time()
-        extensions = 0
-        max_errs = []
-        max_err_mus = []
+    tic = time.time()
+    extensions = 0
+    max_errs = []
+    max_err_mus = []
 
-        while True:
-            with logger.block('Reducing ...'):
+    while True:
+        with logger.block('Reducing ...'):
+            rd = reductor.reduce()
+
+        if sample_count == 0:
+            logger.info('There is nothing else to do for empty samples.')
+            return {'rd': rd,
+                    'max_errs': [], 'max_err_mus': [], 'extensions': 0,
+                    'time': time.time() - tic}
+
+        with logger.block('Estimating errors ...'):
+            if use_estimator:
+                errors, mus = list(zip(*pool.apply(_estimate, rd=rd, d=None, reductor=None,
+                                                   samples=samples, error_norm=None)))
+            else:
+                errors, mus = list(zip(*pool.apply(_estimate, rd=rd, d=d_r, reductor=reductor,
+                                                   samples=samples, error_norm=error_norm_r)))
+        max_err_ind = np.argmax(errors)
+        max_err, max_err_mu = errors[max_err_ind], mus[max_err_ind]
+
+        max_errs.append(max_err)
+        max_err_mus.append(max_err_mu)
+        logger.info('Maximum error after {} extensions: {} (mu = {})'.format(extensions, max_err, max_err_mu))
+
+        if atol is not None and max_err <= atol:
+            logger.info('Absolute error tolerance ({}) reached! Stoping extension loop.'.format(atol))
+            break
+
+        if rtol is not None and max_err / max_errs[0] <= rtol:
+            logger.info('Relative error tolerance ({}) reached! Stoping extension loop.'.format(rtol))
+            break
+
+        with logger.block('Computing solution snapshot for mu = {} ...'.format(max_err_mu)):
+            U = d.solve(max_err_mu)
+        with logger.block('Extending basis with solution snapshot ...'):
+            try:
+                reductor.extend_basis(U, copy_U=False, **extension_params)
+            except ExtensionError:
+                logger.info('Extension failed. Stopping now.')
+                break
+        extensions += 1
+
+        logger.info('')
+
+        if max_extensions is not None and extensions >= max_extensions:
+            logger.info('Maximum number of {} extensions reached.'.format(max_extensions))
+            with logger.block('Reducing once more ...'):
                 rd = reductor.reduce()
+            break
 
-            if sample_count == 0:
-                logger.info('There is nothing else to do for empty samples.')
-                return {'rd': rd,
-                        'max_errs': [], 'max_err_mus': [], 'extensions': 0,
-                        'time': time.time() - tic}
-
-            with logger.block('Estimating errors ...'):
-                if use_estimator:
-                    errors, mus = list(zip(*pool.apply(_estimate, rd=rd, d=None, reductor=None,
-                                                       samples=samples, error_norm=None)))
-                else:
-                    errors, mus = list(zip(*pool.apply(_estimate, rd=rd, d=d, reductor=reductor,
-                                                       samples=samples, error_norm=error_norm)))
-            max_err_ind = np.argmax(errors)
-            max_err, max_err_mu = errors[max_err_ind], mus[max_err_ind]
-
-            max_errs.append(max_err)
-            max_err_mus.append(max_err_mu)
-            logger.info('Maximum error after {} extensions: {} (mu = {})'.format(extensions, max_err, max_err_mu))
-
-            if atol is not None and max_err <= atol:
-                logger.info('Absolute error tolerance ({}) reached! Stoping extension loop.'.format(atol))
-                break
-
-            if rtol is not None and max_err / max_errs[0] <= rtol:
-                logger.info('Relative error tolerance ({}) reached! Stoping extension loop.'.format(rtol))
-                break
-
-            with logger.block('Computing solution snapshot for mu = {} ...'.format(max_err_mu)):
-                U = d.solve(max_err_mu)
-            with logger.block('Extending basis with solution snapshot ...'):
-                try:
-                    reductor.extend_basis(U, copy_U=False, **extension_params)
-                except ExtensionError:
-                    logger.info('Extension failed. Stopping now.')
-                    break
-            extensions += 1
-
-            logger.info('')
-
-            if max_extensions is not None and extensions >= max_extensions:
-                logger.info('Maximum number of {} extensions reached.'.format(max_extensions))
-                with logger.block('Reducing once more ...'):
-                    rd = reductor.reduce()
-                break
-
-        tictoc = time.time() - tic
-        logger.info('Greedy search took {} seconds'.format(tictoc))
-        return {'rd': rd,
-                'max_errs': max_errs, 'max_err_mus': max_err_mus, 'extensions': extensions,
-                'time': tictoc}
+    tictoc = time.time() - tic
+    logger.info('Greedy search took {} seconds'.format(tictoc))
+    return {'rd': rd,
+            'max_errs': max_errs, 'max_err_mus': max_err_mus, 'extensions': extensions,
+            'time': tictoc}
 
 
 def _estimate(rd=None, d=None, reductor=None, samples=None, error_norm=None):

@@ -3,9 +3,10 @@
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
 from itertools import chain
+from numbers import Number
 
 
-from pymor.parallel.basic import WorkerPoolBase
+from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
 from pymor.tools import mpi
 
 
@@ -23,73 +24,80 @@ class MPIPool(WorkerPoolBase):
     def __len__(self):
         return mpi.size
 
-    def _push_object(self, obj):
-        return mpi.call(mpi.function_call_manage, _push_object, obj)
+    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
+        assert worker is None or (not store and not scatter)
 
-    def _apply(self, function, *args, **kwargs):
-        return mpi.call(mpi.function_call, _worker_call_function, function, *args, **kwargs)
-
-    def _apply_only(self, function, worker, *args, **kwargs):
         payload = mpi.get_object(self._payload)
+
         payload[0] = (function, args, kwargs)
-        try:
-            result = mpi.call(mpi.function_call, _single_worker_call_function, self._payload, worker)
-        finally:
-            payload[0] = None
-        return result
-
-    def _map(self, function, chunks, **kwargs):
-        payload = mpi.get_object(self._payload)
-        payload[0] = chunks
-        try:
-            result = mpi.call(mpi.function_call, _worker_map_function, self._payload, function, **kwargs)
-        finally:
-            payload[0] = None
-        return result
-
-    def _remove_object(self, remote_id):
-        mpi.call(mpi.remove_object, remote_id)
-
-
-def _worker_call_function(function, *args, **kwargs):
-    result = function(*args, **kwargs)
-    return mpi.comm.gather(result, root=0)
-
-
-def _single_worker_call_function(payload, worker):
-    if mpi.rank0:
-        if worker == 0:
-            function, args, kwargs = payload[0]
-            return mpi.function_call(function, *args, **kwargs)
+        if worker is None:
+            result = mpi.call(_worker_call_function, store, scatter, payload)
         else:
-            mpi.comm.send(payload[0], dest=worker)
-            return mpi.comm.recv(source=worker)
-    else:
-        if mpi.rank != worker:
-            return
-        (function, args, kwargs) = mpi.comm.recv(source=0)
-        retval = mpi.function_call(function, *args, **kwargs)
-        mpi.comm.send(retval, dest=0)
+            result = mpi.call(_single_worker_call_function,
+                              [worker] if isinstance(worker, Number) else worker,
+                              payload)
+            if isinstance(worker, Number):
+                result = result[0]
+        payload[0] = 0
 
+        return result
 
-def _worker_map_function(payload, function, **kwargs):
-
-    if mpi.rank0:
-        args = list(zip(*payload[0]))
-    else:
-        args = None
-    args = zip(*mpi.comm.scatter(args, root=0))
-
-    result = [mpi.function_call(function, *a, **kwargs) for a in args]
-    result = mpi.comm.gather(result, root=0)
-
-    if mpi.rank0:
-        return list(chain(*result))
+    def _remove(self, remote_resource):
+        mpi.call(mpi.remove_object, remote_resource)
 
 
 def _setup_worker():
     return [None]
 
 
-def _push_object(obj):
-    return obj
+def _worker_call_function(store, scatter, payload):
+    if scatter:
+        function, kwargs = mpi.comm.bcast((payload[0][0], payload[0][2]) if mpi.rank0 else None, root=0)
+        args = mpi.comm.scatter(zip(*payload[0][1]) if mpi.rank0 else None, root=0)
+    else:
+        function, args, kwargs = mpi.comm.bcast(payload[0] if mpi.rank0 else None, root=0)
+
+    result = _eval_function(function, args, kwargs)
+
+    if store:
+        return mpi.manage_object(result)
+    else:
+        return mpi.comm.gather(result, root=0)
+
+
+def _single_worker_call_function(worker, payload):
+    if mpi.rank0:
+        for w in worker:
+            if w == 0:
+                pass
+            else:
+                mpi.comm.send(payload[0], dest=w)
+
+        results = []
+        for w in worker:
+            if w == 0:
+                function, args, kwargs = payload[0]
+                result = _eval_function(function, args, kwargs)
+            else:
+                result = mpi.comm.recv(source=w)
+            results.append(result)
+
+        return results
+
+    elif mpi.rank in worker:
+        function, args, kwargs = mpi.comm.recv(source=0)
+        result = _eval_function(function, args, kwargs)
+        mpi.comm.send(result, dest=0)
+
+
+def _eval_function(function, args, kwargs):
+    def get_obj(obj):
+        if isinstance(obj, RemoteResourceWithPath):
+            return obj.resolve_path(mpi.get_object(obj.remote_resource))
+        else:
+            return obj
+
+    function = get_obj(function)
+    args = (get_obj(v) for v in args)
+    kwargs = {k: get_obj(v) for k, v in kwargs.items()}
+    return function(*args, **kwargs)

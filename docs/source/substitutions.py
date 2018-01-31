@@ -38,8 +38,10 @@ interfaces = '''
 .. |ParameterSpaces| replace:: :class:`ParameterSpaces <pymor.parameters.interfaces.ParameterSpaceInterface>`
 .. |ReferenceElements| replace:: :class:`ReferenceElements <pymor.grids.interfaces.ReferenceElementInterface>`
 .. |ReferenceElement| replace:: :class:`ReferenceElement <pymor.grids.interfaces.ReferenceElementInterface>`
-.. |RemoteObject| replace:: :class:`RemoteObject <pymor.parallel.interfaces.RemoteObjectInterface>`
-.. |RemoteObjects| replace:: :class:`RemoteObjects <pymor.parallel.interfaces.RemoteObjectInterface>`
+.. |RemoteObject| replace:: :class:`RemoteObject <pymor.parallel.interfaces.RemoteObject>`
+.. |RemoteObjects| replace:: :class:`RemoteObjects <pymor.parallel.interfaces.RemoteObject>`
+.. |RemotePath| replace:: :class:`RemotePath <pymor.parallel.interfaces.RemotePath>`
+.. |RemotePaths| replace:: :class:`RemotePaths <pymor.parallel.interfaces.RemotePath>`
 .. |VectorArrays| replace:: :class:`VectorArrays <pymor.vectorarrays.interfaces.VectorArrayInterface>`
 .. |VectorArray| replace:: :class:`VectorArray <pymor.vectorarrays.interfaces.VectorArrayInterface>`
 .. |WorkerPool| replace:: :class:`WorkerPool <pymor.parallel.interfaces.WorkerPoolInterface>`

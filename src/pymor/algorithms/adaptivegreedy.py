@@ -11,7 +11,6 @@ from pymor.core.exceptions import ExtensionError
 from pymor.core.interfaces import BasicInterface
 from pymor.core.logger import getLogger
 from pymor.parallel.dummy import dummy_pool
-from pymor.parallel.manager import RemoteObjectManager
 from pymor.parameters.base import Parameter
 from pymor.parameters.spaces import CubicParameterSpace
 
@@ -107,166 +106,163 @@ def adaptive_greedy(d, reductor, parameter_space=None,
         if use_estimator:
             errors = pool.map(_estimate, mus, rd=rd)
         else:
-            errors = pool.map(_estimate, mus, rd=rd, d=d, reductor=reductor, error_norm=error_norm)
+            errors = pool.map(_estimate, mus, rd=rd, d=d_r, reductor=reductor, error_norm=error_norm_r)
         # most error_norms will return an array of length 1 instead of a number, so we extract the numbers
         # if necessary
         return np.array([x[0] if hasattr(x, '__len__') else x for x in errors])
 
     logger = getLogger('pymor.algorithms.adaptivegreedy.adaptive_greedy')
 
-    if pool is None or pool is dummy_pool:
-        pool = dummy_pool
-    else:
+    if pool:
         logger.info('Using pool of {} workers for parallel greedy search'.format(len(pool)))
 
-    with RemoteObjectManager() as rom:
-        # Push everything we need during the greedy search to the workers.
-        if not use_estimator:
-            rom.manage(pool.push(d))
-            if error_norm:
-                rom.manage(pool.push(error_norm))
+    # Push everything we need during the greedy search to the workers.
+    if not use_estimator:
+        d_r = pool.push(d)
+        if error_norm:
+            error_norm_r = pool.push(error_norm)
 
-        tic = time.time()
+    tic = time.time()
 
-        # setup training and validation sets
-        parameter_space = parameter_space or d.parameter_space
-        sample_set = AdaptiveSampleSet(parameter_space)
-        if validation_mus <= 0:
-            validation_set = sample_set.center_mus + parameter_space.sample_randomly(-validation_mus)
-        else:
-            validation_set = parameter_space.sample_randomly(validation_mus)
-        if visualize and sample_set.dim not in (2, 3):
-            raise NotImplementedError
-        logger.info('Training set size: {}. Validation set size: {}'
-                    .format(len(sample_set.vertex_mus), len(validation_set)))
+    # setup training and validation sets
+    parameter_space = parameter_space or d.parameter_space
+    sample_set = AdaptiveSampleSet(parameter_space)
+    if validation_mus <= 0:
+        validation_set = sample_set.center_mus + parameter_space.sample_randomly(-validation_mus)
+    else:
+        validation_set = parameter_space.sample_randomly(validation_mus)
+    if visualize and sample_set.dim not in (2, 3):
+        raise NotImplementedError
+    logger.info('Training set size: {}. Validation set size: {}'
+                .format(len(sample_set.vertex_mus), len(validation_set)))
 
-        extensions = 0
-        max_errs = []
-        max_err_mus = []
-        max_val_errs = []
-        max_val_err_mus = []
-        refinements = []
-        training_set_sizes = []
+    extensions = 0
+    max_errs = []
+    max_err_mus = []
+    max_val_errs = []
+    max_val_err_mus = []
+    refinements = []
+    training_set_sizes = []
 
-        while True:  # main loop
-            with logger.block('Reducing ...'):
-                rd = reductor.reduce()
+    while True:  # main loop
+        with logger.block('Reducing ...'):
+            rd = reductor.reduce()
 
-            current_refinements = 0
-            while True:  # estimate reduction errors and refine training set until no overfitting is detected
+        current_refinements = 0
+        while True:  # estimate reduction errors and refine training set until no overfitting is detected
 
-                # estimate on training set
-                with logger.block('Estimating errors ...'):
-                    errors = estimate(sample_set.vertex_mus)
-                max_err_ind = np.argmax(errors)
-                max_err, max_err_mu = errors[max_err_ind], sample_set.vertex_mus[max_err_ind]
-                logger.info('Maximum error after {} extensions: {} (mu = {})'.format(extensions, max_err, max_err_mu))
+            # estimate on training set
+            with logger.block('Estimating errors ...'):
+                errors = estimate(sample_set.vertex_mus)
+            max_err_ind = np.argmax(errors)
+            max_err, max_err_mu = errors[max_err_ind], sample_set.vertex_mus[max_err_ind]
+            logger.info('Maximum error after {} extensions: {} (mu = {})'.format(extensions, max_err, max_err_mu))
 
-                # estimate on validation set
-                val_errors = estimate(validation_set)
-                max_val_err_ind = np.argmax(val_errors)
-                max_val_err, max_val_err_mu = val_errors[max_val_err_ind], validation_set[max_val_err_ind]
-                logger.info('Maximum validation error: {}'.format(max_val_err))
-                logger.info('Validation error to training error ratio: {:.3e}'.format(max_val_err / max_err))
+            # estimate on validation set
+            val_errors = estimate(validation_set)
+            max_val_err_ind = np.argmax(val_errors)
+            max_val_err, max_val_err_mu = val_errors[max_val_err_ind], validation_set[max_val_err_ind]
+            logger.info('Maximum validation error: {}'.format(max_val_err))
+            logger.info('Validation error to training error ratio: {:.3e}'.format(max_val_err / max_err))
 
-                if max_val_err >= max_err * rho:  # overfitting?
+            if max_val_err >= max_err * rho:  # overfitting?
 
-                    # compute element indicators for training set refinement
-                    if current_refinements == 0:
-                        logger.info2('Overfitting detected. Computing element indicators ...')
-                    else:
-                        logger.info3('Overfitting detected after refinement. Computing element indicators ...')
-                    vertex_errors = np.max(errors[sample_set.vertex_ids], axis=1)
-                    center_errors = estimate(sample_set.center_mus)
-                    indicators_age_part = (gamma * sample_set.volumes / sample_set.total_volume
-                                           * (sample_set.refinement_count - sample_set.creation_times))
-                    indicators_error_part = np.max([vertex_errors, center_errors], axis=0) / max_err
-                    indicators = indicators_age_part + indicators_error_part
-
-                    # select elements
-                    sorted_indicators_inds = np.argsort(indicators)[::-1]
-                    refinement_elements = sorted_indicators_inds[:max(int(len(sorted_indicators_inds) * theta), 1)]
-                    logger.info('Refining {} elements: {}'.format(len(refinement_elements), refinement_elements))
-
-                    # visualization
-                    if visualize:
-                        from mpl_toolkits.mplot3d import Axes3D  # NOQA
-                        import matplotlib.pyplot as plt
-                        plt.figure()
-                        plt.subplot(2, 2, 1, projection=None if sample_set.dim == 2 else '3d')
-                        plt.title('estimated errors')
-                        sample_set.visualize(vertex_data=errors, center_data=center_errors, new_figure=False)
-                        plt.subplot(2, 2, 2, projection=None if sample_set.dim == 2 else '3d')
-                        plt.title('indicators_error_part')
-                        vmax = np.max([indicators_error_part, indicators_age_part, indicators])
-                        data = {('volume_data' if sample_set.dim == 2 else 'center_data'): indicators_error_part}
-                        sample_set.visualize(vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False,
-                                             **data)
-                        plt.subplot(2, 2, 3, projection=None if sample_set.dim == 2 else '3d')
-                        plt.title('indicators_age_part')
-                        data = {('volume_data' if sample_set.dim == 2 else 'center_data'): indicators_age_part}
-                        sample_set.visualize(vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False,
-                                             **data)
-                        plt.subplot(2, 2, 4, projection=None if sample_set.dim == 2 else '3d')
-                        if sample_set.dim == 2:
-                            plt.title('indicators')
-                            sample_set.visualize(volume_data=indicators,
-                                                 center_data=np.zeros(len(refinement_elements)),
-                                                 center_inds=refinement_elements,
-                                                 vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False)
-                        else:
-                            plt.title('selected cells')
-                            sample_set.visualize(center_data=np.zeros(len(refinement_elements)),
-                                                 center_inds=refinement_elements,
-                                                 vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False)
-                        plt.show()
-
-                    # refine training set
-                    sample_set.refine(refinement_elements)
-                    current_refinements += 1
-
-                    # update validation set if needed
-                    if validation_mus <= 0:
-                        validation_set = sample_set.center_mus + parameter_space.sample_randomly(-validation_mus)
-
-                    logger.info('New training set size: {}. New validation set size: {}'
-                                .format(len(sample_set.vertex_mus), len(validation_set)))
-                    logger.info('Number of refinements: {}'.format(sample_set.refinement_count))
-                    logger.info('')
+                # compute element indicators for training set refinement
+                if current_refinements == 0:
+                    logger.info2('Overfitting detected. Computing element indicators ...')
                 else:
-                    break  # no overfitting, leave the refinement loop
+                    logger.info3('Overfitting detected after refinement. Computing element indicators ...')
+                vertex_errors = np.max(errors[sample_set.vertex_ids], axis=1)
+                center_errors = estimate(sample_set.center_mus)
+                indicators_age_part = (gamma * sample_set.volumes / sample_set.total_volume
+                                       * (sample_set.refinement_count - sample_set.creation_times))
+                indicators_error_part = np.max([vertex_errors, center_errors], axis=0) / max_err
+                indicators = indicators_age_part + indicators_error_part
 
-            max_errs.append(max_err)
-            max_err_mus.append(max_err_mu)
-            max_val_errs.append(max_val_err)
-            max_val_err_mus.append(max_val_err_mu)
-            refinements.append(current_refinements)
-            training_set_sizes.append(len(sample_set.vertex_mus))
+                # select elements
+                sorted_indicators_inds = np.argsort(indicators)[::-1]
+                refinement_elements = sorted_indicators_inds[:max(int(len(sorted_indicators_inds) * theta), 1)]
+                logger.info('Refining {} elements: {}'.format(len(refinement_elements), refinement_elements))
 
-            # break if traget error reached
-            if target_error is not None and max_err <= target_error:
-                logger.info('Reached maximal error on snapshots of {} <= {}'.format(max_err, target_error))
+                # visualization
+                if visualize:
+                    from mpl_toolkits.mplot3d import Axes3D  # NOQA
+                    import matplotlib.pyplot as plt
+                    plt.figure()
+                    plt.subplot(2, 2, 1, projection=None if sample_set.dim == 2 else '3d')
+                    plt.title('estimated errors')
+                    sample_set.visualize(vertex_data=errors, center_data=center_errors, new_figure=False)
+                    plt.subplot(2, 2, 2, projection=None if sample_set.dim == 2 else '3d')
+                    plt.title('indicators_error_part')
+                    vmax = np.max([indicators_error_part, indicators_age_part, indicators])
+                    data = {('volume_data' if sample_set.dim == 2 else 'center_data'): indicators_error_part}
+                    sample_set.visualize(vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False,
+                                         **data)
+                    plt.subplot(2, 2, 3, projection=None if sample_set.dim == 2 else '3d')
+                    plt.title('indicators_age_part')
+                    data = {('volume_data' if sample_set.dim == 2 else 'center_data'): indicators_age_part}
+                    sample_set.visualize(vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False,
+                                         **data)
+                    plt.subplot(2, 2, 4, projection=None if sample_set.dim == 2 else '3d')
+                    if sample_set.dim == 2:
+                        plt.title('indicators')
+                        sample_set.visualize(volume_data=indicators,
+                                             center_data=np.zeros(len(refinement_elements)),
+                                             center_inds=refinement_elements,
+                                             vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False)
+                    else:
+                        plt.title('selected cells')
+                        sample_set.visualize(center_data=np.zeros(len(refinement_elements)),
+                                             center_inds=refinement_elements,
+                                             vertex_size=visualize_vertex_size, vmin=0, vmax=vmax, new_figure=False)
+                    plt.show()
+
+                # refine training set
+                sample_set.refine(refinement_elements)
+                current_refinements += 1
+
+                # update validation set if needed
+                if validation_mus <= 0:
+                    validation_set = sample_set.center_mus + parameter_space.sample_randomly(-validation_mus)
+
+                logger.info('New training set size: {}. New validation set size: {}'
+                            .format(len(sample_set.vertex_mus), len(validation_set)))
+                logger.info('Number of refinements: {}'.format(sample_set.refinement_count))
+                logger.info('')
+            else:
+                break  # no overfitting, leave the refinement loop
+
+        max_errs.append(max_err)
+        max_err_mus.append(max_err_mu)
+        max_val_errs.append(max_val_err)
+        max_val_err_mus.append(max_val_err_mu)
+        refinements.append(current_refinements)
+        training_set_sizes.append(len(sample_set.vertex_mus))
+
+        # break if traget error reached
+        if target_error is not None and max_err <= target_error:
+            logger.info('Reached maximal error on snapshots of {} <= {}'.format(max_err, target_error))
+            break
+
+        # basis extension
+        with logger.block('Computing solution snapshot for mu = {} ...'.format(max_err_mu)):
+            U = d.solve(max_err_mu)
+        with logger.block('Extending basis with solution snapshot ...'):
+            try:
+                reductor.extend_basis(U, copy_U=False, **extension_params)
+            except ExtensionError:
+                logger.info('Extension failed. Stopping now.')
                 break
+        extensions += 1
 
-            # basis extension
-            with logger.block('Computing solution snapshot for mu = {} ...'.format(max_err_mu)):
-                U = d.solve(max_err_mu)
-            with logger.block('Extending basis with solution snapshot ...'):
-                try:
-                    reductor.extend_basis(U, copy_U=False, **extension_params)
-                except ExtensionError:
-                    logger.info('Extension failed. Stopping now.')
-                    break
-            extensions += 1
+        logger.info('')
 
-            logger.info('')
-
-            # break if prescribed basis size reached
-            if max_extensions is not None and extensions >= max_extensions:
-                logger.info('Maximum number of {} extensions reached.'.format(max_extensions))
-                with logger.block('Reducing once more ...'):
-                    rd = reductor.reduce()
-                break
+        # break if prescribed basis size reached
+        if max_extensions is not None and extensions >= max_extensions:
+            logger.info('Maximum number of {} extensions reached.'.format(max_extensions))
+            with logger.block('Reducing once more ...'):
+                rd = reductor.reduce()
+            break
 
     tictoc = time.time() - tic
     logger.info('Greedy search took {} seconds'.format(tictoc))

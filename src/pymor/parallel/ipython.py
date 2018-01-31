@@ -3,13 +3,13 @@
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
 from itertools import chain
+from numbers import Number
 import os
 import time
 
-
 from pymor.core.config import config
 from pymor.core.interfaces import BasicInterface
-from pymor.parallel.basic import WorkerPoolBase
+from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
 from pymor.tools.counter import Counter
 
 
@@ -154,40 +154,34 @@ class IPythonPool(WorkerPoolBase):
     def __len__(self):
         return len(self.view)
 
-    def _push_object(self, obj):
-        remote_id = RemoteId(self._remote_objects_created.inc())
-        self.view.apply_sync(_push_object, remote_id, obj)
-        return remote_id
+    def _remove(self, remote_resource):
+        self.view.apply(_remove_object, remote_resource)
 
-    def _apply(self, function, *args, **kwargs):
-        return self.view.apply_sync(_worker_call_function, function, False, args, kwargs)
+    def _apply(self, function, *args, store=False, scatter=False, worker=None, **kwargs):
+        assert worker is None or (not store and not scatter)
 
-    def _apply_only(self, function, worker, *args, **kwargs):
-        view = self.client[worker]
-        return view.apply_sync(_worker_call_function, function, False, args, kwargs)
+        if worker is None:
+            view = self.view
+        elif isinstance(worker, Number):
+            view = self.client[int(worker)]
+        else:
+            view = self.client[[int(w) for w in worker]]
 
-    def _map(self, function, chunks, **kwargs):
-        result = self.view.map_sync(_worker_call_function,
-                                    *zip(*((function, True, a, kwargs) for a in zip(*chunks))))
-        return list(chain(*result))
+        if store:
+            remote_resource = self._remote_objects_created.inc()
+        else:
+            remote_resource = None
 
-    def _remove_object(self, remote_id):
-        self.view.apply(_remove_object, remote_id)
+        if scatter:
+            result = view.map_sync(_worker_call_function, *zip(*((function, a, kwargs, remote_resource)
+                                                                 for a in zip(*args))))
+        else:
+            result = view.apply_sync(_worker_call_function, function, args, kwargs, remote_resource)
 
-
-class RemoteId(int):
-    pass
-
-
-def _worker_call_function(function, loop, args, kwargs):
-    global _remote_objects
-    kwargs = {k: (_remote_objects[v] if isinstance(v, RemoteId) else  # NOQA
-                  v)
-              for k, v in kwargs.items()}
-    if loop:
-        return [function(*a, **kwargs) for a in zip(*args)]
-    else:
-        return function(*args, **kwargs)
+        if store:
+            return remote_resource
+        else:
+            return result
 
 
 def _setup_worker():
@@ -195,11 +189,26 @@ def _setup_worker():
     _remote_objects = {}
 
 
-def _push_object(remote_id, obj):
+def _remove_object(remote_resource):
     global _remote_objects
-    _remote_objects[remote_id] = obj  # NOQA
+    del _remote_objects[remote_resource]
 
 
-def _remove_object(remote_id):
+def _worker_call_function(function, args, kwargs, remote_resource):
     global _remote_objects
-    del _remote_objects[remote_id]  # NOQA
+
+    def get_obj(obj):
+        if isinstance(obj, RemoteResourceWithPath):
+            return obj.resolve_path(_remote_objects[obj.remote_resource])
+        else:
+            return obj
+
+    function = get_obj(function)
+    args = (get_obj(v) for v in args)
+    kwargs = {k: get_obj(v) for k, v in kwargs.items()}
+
+    result = function(*args, **kwargs)
+    if remote_resource is not None:
+        _remote_objects[remote_resource] = result
+
+    return result

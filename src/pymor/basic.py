@@ -57,7 +57,6 @@ from pymor.operators.ei import EmpiricalInterpolatedOperator
 from pymor.operators.numpy import NumpyGenericOperator, NumpyMatrixOperator
 
 from pymor.parallel.default import new_parallel_pool
-from pymor.parallel.manager import RemoteObjectManager
 
 from pymor.parameters.base import Parameter
 from pymor.parameters.functionals import (ProjectionParameterFunctional, GenericParameterFunctional,

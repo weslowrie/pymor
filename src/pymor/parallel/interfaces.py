@@ -21,7 +21,14 @@ class WorkerPoolInterface(BasicInterface):
     automatically scatters the data among the workers.
 
     All operations are performed synchronously.
+
+    Attributes
+    ----------
+    remote_objects
+        Set of all objects managed by the workers.
     """
+
+    remote_objects = None
 
     @abstractmethod
     def __len__(self):
@@ -33,10 +40,9 @@ class WorkerPoolInterface(BasicInterface):
         """Push a copy of `obj` to  all workers of the pool.
 
         A |RemoteObject| is returned as a handle to the pushed object.
-        This object can be used as a keyword argument to :meth:`~WorkerPoolInterface.apply`,
-        :meth:`~WorkerPoolInterface.apply_only`, :meth:`~WorkerPoolInterface.map`
-        and will then be transparently mapped to the respective copy
-        of the pushed object on the worker.
+        This object can be used as an argument to :meth:`~WorkerPoolInterface.apply`,
+        :meth:`~WorkerPoolInterface.map` and will then be transparently mapped to the
+        respective copy of the pushed object on the worker.
 
         |Immutable| objects will be pushed only once. If the same |immutable| object
         is pushed a second time, the returned |RemoteObject| will refer to the
@@ -56,33 +62,15 @@ class WorkerPoolInterface(BasicInterface):
         pass
 
     @abstractmethod
-    def scatter_array(self, U, copy=True):
-        """Distribute |VectorArray| evenly among the workers.
+    def scatter(self, l):
+        """Distribute a |VectorArray| or a list of objects evenly among the workers.
 
-        On each worker a |VectorArray| is created holding an (up to rounding) equal
-        amount of vectors of `U`. The returned |RemoteObject| therefore refers
+        On each worker a |VectorArray| or `list` is created holding an (up to rounding)
+        equal amount of objects of `l`. The returned |RemoteObject| therefore refers
         to different data on each of the workers.
 
-        Parameters
-        ----------
-        U
-            The |VectorArray| to distribute.
-        copy
-            If `False`, `U` will be emptied during distribution of the vectors.
-
-        Returns
-        -------
-        A |RemoteObject| referring to the scattered data.
-        """
-        pass
-
-    @abstractmethod
-    def scatter_list(self, l):
-        """Distribute list of objects evenly among the workers.
-
-        On each worker a `list` is created holding an (up to rounding) equal
-        amount of objects of `l`. The returned |RemoteObject| therefore refers
-        to different data on each of the workers.
+        If `len(l)` is equal to the size of the pool, it is guaranteed that the n-th
+        element of `l` is assigned to the n-th worker of the pool.
 
         Parameters
         ----------
@@ -96,14 +84,31 @@ class WorkerPoolInterface(BasicInterface):
         pass
 
     @abstractmethod
-    def apply(self, function, *args, **kwargs):
+    def get(self, obj, worker=None):
+        """Communicate object refered to by the given |RemoteObject|
+
+        Parameters
+        ----------
+        obj
+            |RemoteObject| or |RemotePath| to communicate.
+        worker
+            If not `None`, list of workers for which to communicate `obj`.
+
+        Returns
+        -------
+        List of communicated objects of length `len(worker)`.
+        """
+        pass
+
+    @abstractmethod
+    def apply(self, function, *args, store=False, worker=None, **kwargs):
         """Apply function in parallel on each worker.
 
         This calls `function` on each worker in parallel, passing `args` as
-        positional and `kwargs` as keyword arguments. Keyword arguments
-        which are |RemoteObjects| are automatically mapped to the
-        respective object on the worker. Moreover, keyword arguments which
-        are |immutable| objects that have already been pushed to the workers
+        positional and `kwargs` as keyword arguments. Positional or keyword
+        arguments which are |RemoteObjects| or |RemotePaths| are automatically
+        mapped to the respective object on the worker. Moreover, arguments
+        which are |immutable| objects that have already been pushed to the workers
         will not be transmitted again. (|Immutable| objects which have not
         been pushed before will be transmitted and the remote copy will be
         destroyed after function execution.)
@@ -116,44 +121,19 @@ class WorkerPoolInterface(BasicInterface):
             The positional arguments for `function`.
         kwargs
             The keyword arguments for `function`.
+        store
+            If `True`, do not communicate the results but return a
+            |RemoteObject| instead. Only possible when `worker` is
+            `None`.
+        worker
+            If not `None`, list of workers for which to execute `function`.
 
         Returns
         -------
         List of return values of the function executions, ordered by
-        worker number (from `0` to `len(pool) - 1`).
+        worker number (from `0` to `len(pool) - 1`), in case `store`
+        is `True`. Otherwise a |RemoteObject| referring to the results.
         """
-        pass
-
-    @abstractmethod
-    def apply_only(self, function, worker, *args, **kwargs):
-        """Apply function on a single worker.
-
-        This calls `function` on on the worker with number `worker`, passing
-        `args` as positional and `kwargs` as keyword arguments. Keyword arguments
-        which are |RemoteObjects| are automatically mapped to the
-        respective object on the worker. Moreover, keyword arguments which
-        are |immutable| objects that have already been pushed to the workers
-        will not be transmitted again. (|Immutable| objects which have not
-        been pushed before will be transmitted and the remote copy will be
-        destroyed after function execution.)
-
-        Parameters
-        ----------
-        function
-            The function to execute.
-        worker
-            The worker on which to execute the function. (Number between
-            `0` and `len(pool) - 1`.)
-        args
-            The positional arguments for `function`.
-        kwargs
-            The keyword arguments for `function`.
-
-        Returns
-        -------
-        Return value of the function execution.
-        """
-        pass
 
     @abstractmethod
     def map(self, function, *args, **kwargs):
@@ -162,12 +142,12 @@ class WorkerPoolInterface(BasicInterface):
         Each positional argument (after `function`) must be a sequence
         of same length n. `map` calls `function` in parallel on each of these n
         positional argument combinations, always passing `kwargs` as keyword
-        arguments.  Keyword arguments which are |RemoteObjects| are automatically
-        mapped to the respective object on the worker. Moreover, keyword arguments
-        which are |immutable| objects that have already been pushed to the workers
-        will not be transmitted again. (|Immutable| objects which have not
-        been pushed before will be transmitted and the remote copy will be
-        destroyed after function execution.)
+        arguments.  Keyword arguments which are |RemoteObjects| or |RemotePaths|
+        are automatically mapped to the respective object on the worker. Moreover,
+        keyword arguments which are |immutable| objects that have already been
+        pushed to the workers will not be transmitted again. (|Immutable| objects
+        which have not been pushed before will be transmitted and the remote copy
+        will be destroyed after function execution.)
 
         Parameters
         ----------
@@ -186,51 +166,48 @@ class WorkerPoolInterface(BasicInterface):
         pass
 
 
-class RemoteObjectInterface(object):
+class RemoteObjectBase:
+    pool = None
+
+    def __call__(self, *args, worker=None, store=False, **kwargs):
+        return self.pool.apply(self, *args, worker=worker, store=store, **kwargs)
+
+    def get(self, worker=None):
+        return self.pool.get(self, worker=worker)
+
+
+class RemoteObject(RemoteObjectBase):
     """Handle to remote data on the workers of a |WorkerPool|.
 
     See documentation of :class:`WorkerPoolInterface` for usage
     of these handles in conjunction with :meth:`~WorkerPoolInterface.apply`,
-    :meth:`~WorkerPoolInterface.scatter_array`,
-    :meth:`~WorkerPoolInterface.scatter_list`.
+    :meth:`~WorkerPoolInterface.scatter` and
+    :meth:`~WorkerPoolInterface.map`.
 
-    Remote objects can be used as a context manager: when leaving the
-    context, the remote object's :meth:`~RemoteObjectInterface.remove`
-    method is called to ensure proper cleanup of remote resources.
-
-    Attributes
-    ----------
-    removed
-        `True`, after :meth:`remove` has been called.
+    Accessing an arbitrary attribute of an RemoteObject or indexing
+    with an arbitrary index yields a |RemotePath| holding a symbolic
+    reference to the respective object.
     """
 
-    removed = False
+    def __init__(self, pool, remote_resource):
+        self.pool, self.remote_resource = pool, remote_resource
 
-    @abstractmethod
-    def _remove(self):
-        """Actual implementation of 'remove'."""
-        pass
+    def __getattr__(self, name):
+        return RemotePath(self, [name])
 
-    def remove(self):
-        """Remove the remote object from the workers.
+    def __getitem__(self, key):
+        return RemotePath(self, [[key]])
 
-        Remove the object this handle refers to from all workers.
-        Note that the object will only be destroyed if no other
-        object on the worker holds a reference to that object.
-        Moreover, |immutable| objects will only be destroyed if
-        :meth:`remove` has been called on *all* |RemoteObjects|
-        which refer to the object (see :meth:`~WorkerPoolInterface.push`).
-        """
-        if self.removed:
-            return
-        self._remove()
-        self.removed = True
 
-    def __enter__(self):
-        return self
+class RemotePath(RemoteObjectBase):
+    """|RemoteObject| together with a path of attributes/indices."""
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.remove()
+    def __init__(self, remote_object, path):
+        self.remote_object, self.path = remote_object, path
+        self.pool = remote_object.pool
 
-    def __del__(self):
-        self.remove()
+    def __getattr__(self, name):
+        return RemotePath(self.remote_object, self.path + [name])
+
+    def __getitem__(self, key):
+        return RemotePath(self.remote_object, self.path + [[key]])
