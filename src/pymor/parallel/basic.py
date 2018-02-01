@@ -57,16 +57,20 @@ class WorkerPoolBase(WorkerPoolInterface):
 
     def map(self, function, *args, **kwargs):
         assert len(set(len(a) for a in args)) == 1
-        results = self.apply(_map, self.scatter(list(zip(*args))), f=function, **kwargs)
+        results = self.apply(_map, self.scatter(list(zip(*args)), slice=True), f=function, **kwargs)
         results = list(chain(*results))
         return results
 
-    def scatter(self, l):
-        slice_len = len(l) // len(self) + (1 if len(l) % len(self) else 0)
-        slices = []
-        for i in range(len(self)):
-            slices.append(l[i*slice_len:(i+1)*slice_len])
-        remote_resource = self._scatter(slices)
+    def scatter(self, l, slice=False):
+        if slice:
+            slice_len = len(l) // len(self) + (1 if len(l) % len(self) else 0)
+            slices = []
+            for i in range(len(self)):
+                slices.append(l[i*slice_len:(i+1)*slice_len])
+            remote_resource = self._scatter(slices)
+        else:
+            assert len(l) == len(self)
+            remote_resource = self._scatter(l)
         remote_object = RemoteObject(self, remote_resource)
         self.remote_objects.add(remote_object)
         weakref.finalize(remote_object, self._remove, remote_resource)

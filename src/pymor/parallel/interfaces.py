@@ -62,20 +62,24 @@ class WorkerPoolInterface(BasicInterface):
         pass
 
     @abstractmethod
-    def scatter(self, l):
-        """Distribute a |VectorArray| or a list of objects evenly among the workers.
+    def scatter(self, l, slice=False):
+        """Distribute a lost of objects among the workers.
 
-        On each worker a |VectorArray| or `list` is created holding an (up to rounding)
-        equal amount of objects of `l`. The returned |RemoteObject| therefore refers
-        to different data on each of the workers.
+        The length of `l` has to agree with the number of workers and
+        the n-th worker receives the n-th element of `l`.
+        The returned |RemoteObject| therefore refers to different data
+        on each of the workers.
 
-        If `len(l)` is equal to the size of the pool, it is guaranteed that the n-th
-        element of `l` is assigned to the n-th worker of the pool.
+        When `slice` is `True`, a list of arbitrary size can be provided
+        which is then distributed among the workers in slices of
+        approximate same size.
 
         Parameters
         ----------
         l
             The list (sequence) of objects to distribute.
+        slice
+            See above.
 
         Returns
         -------
@@ -174,6 +178,12 @@ class RemoteObjectBase:
 
     def get(self, worker=None):
         return self.pool.get(self, worker=worker)
+
+    def __copy__(self):
+        return self
+
+    def __deepcopy__(self, memo):
+        return self
 
 
 class RemoteObject(RemoteObjectBase):

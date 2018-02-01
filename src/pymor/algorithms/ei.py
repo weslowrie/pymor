@@ -73,7 +73,7 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
     if pool:  # dispatch to parallel implemenation
         assert isinstance(U, (VectorArrayInterface, RemoteObject))
         if isinstance(U, VectorArrayInterface):
-            U = pool.scatter(U)
+            U = pool.scatter(U, slice=True)
         return _parallel_ei_greedy(U, error_norm=error_norm, atol=atol, rtol=rtol,
                                    max_interpolation_dofs=max_interpolation_dofs, copy=copy, pool=pool)
 

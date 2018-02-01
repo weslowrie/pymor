@@ -84,7 +84,7 @@ def greedy(d, reductor, samples, use_estimator=True, error_norm=None,
     if not use_estimator:
         d_r = pool.push(d)
         error_norm_r = pool.push(error_norm) if error_norm else None
-    samples = pool.scatter(samples)
+    samples = pool.scatter(samples, slice=True)
 
     tic = time.time()
     extensions = 0

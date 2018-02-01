@@ -2,9 +2,7 @@
 # Copyright 2013-2017 pyMOR developers and contributors. All rights reserved.
 # License: BSD 2-Clause License (http://opensource.org/licenses/BSD-2-Clause)
 
-from itertools import chain
 from numbers import Number
-
 
 from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
 from pymor.tools import mpi
@@ -44,7 +42,7 @@ class MPIPool(WorkerPoolBase):
 
     def _scatter(self, l):
         payload = mpi.get_object(self._payload)
-        payload[0] = l
+        payload[0] = list(l)
         remote_resource = mpi.call(_store, payload)
         payload[0] = None
         return remote_resource

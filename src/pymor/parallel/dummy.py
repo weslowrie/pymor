@@ -6,7 +6,6 @@ from copy import deepcopy
 from numbers import Number
 
 from pymor.core.interfaces import ImmutableInterface
-from pymor.core.pickle import dumps, loads
 from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
 
 
