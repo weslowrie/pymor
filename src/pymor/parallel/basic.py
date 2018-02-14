@@ -124,3 +124,52 @@ def _identity(obj):
 def _map(chunks, f=None, **kwargs):
     result = [f(*args, **kwargs) for args in chunks]
     return result
+
+
+######################################################
+
+
+class RemoteResource(int):
+    pass
+
+
+def _setup_worker():
+    global _remote_objects_created, _remote_objects
+    _remote_objects_created = 0
+    _remote_objects = {}
+
+
+def _remove_object(remote_resource):
+    global _remote_objects
+    del _remote_objects[remote_resource]
+
+
+def _store(obj):
+    global _remote_objects, _remote_objects_created
+    remote_resource = RemoteResource(_remote_objects_created)
+    _remote_objects_created += 1
+    _remote_objects[remote_resource] = obj
+    return remote_resource
+
+
+def _worker_call_function(function, args, kwargs, store):
+    global _remote_objects, _remote_objects_created
+
+    def get_obj(obj):
+        if isinstance(obj, RemoteResourceWithPath):
+            return obj.resolve_path(_remote_objects[obj.remote_resource])
+        else:
+            return obj
+
+    function = get_obj(function)
+    args = (get_obj(v) for v in args)
+    kwargs = {k: get_obj(v) for k, v in kwargs.items()}
+
+    result = function(*args, **kwargs)
+    if store:
+        remote_resource = RemoteResource(_remote_objects_created)
+        _remote_objects_created += 1
+        _remote_objects[remote_resource] = result
+        return remote_resource
+    else:
+        return result

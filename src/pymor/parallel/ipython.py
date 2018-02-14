@@ -8,8 +8,7 @@ import time
 
 from pymor.core.config import config
 from pymor.core.interfaces import BasicInterface
-from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
-from pymor.tools.counter import Counter
+from pymor.parallel.basic import WorkerPoolBase, _setup_worker, _store, _remove_object, _worker_call_function
 
 
 if config.HAVE_IPYTHON:
@@ -148,15 +147,14 @@ class IPythonPool(WorkerPoolBase):
             self.view = self.client[:]
         self.logger.info('Connected to {} engines'.format(len(self.view)))
         self.view.apply_sync(_setup_worker)
-        self._remote_objects_created = Counter()
 
     def __len__(self):
         return len(self.view)
 
     def _scatter(self, l):
-        remote_resource = self._remote_objects_created.inc()
-        self.view.map_sync(_store, l, [remote_resource] * len(self))
-        return remote_resource
+        result = self.view.map_sync(_store, l)
+        assert len(set(result)) == 1
+        return result[0]
 
     def _remove(self, remote_resource):
         self.view.apply(_remove_object, remote_resource)
@@ -171,49 +169,10 @@ class IPythonPool(WorkerPoolBase):
         else:
             view = self.client[[int(w) for w in worker]]
 
-        if store:
-            remote_resource = self._remote_objects_created.inc()
-        else:
-            remote_resource = None
-
-        result = view.apply_sync(_worker_call_function, function, args, kwargs, remote_resource)
+        result = view.apply_sync(_worker_call_function, function, args, kwargs, store)
 
         if store:
-            return remote_resource
+            assert len(set(result)) == 1
+            return result[0]
         else:
             return result
-
-
-def _setup_worker():
-    global _remote_objects
-    _remote_objects = {}
-
-
-def _remove_object(remote_resource):
-    global _remote_objects
-    del _remote_objects[remote_resource]
-
-
-def _store(obj, remote_resource):
-    _remote_objects[remote_resource] = obj
-
-
-def _worker_call_function(function, args, kwargs, remote_resource):
-    global _remote_objects
-
-    def get_obj(obj):
-        if isinstance(obj, RemoteResourceWithPath):
-            return obj.resolve_path(_remote_objects[obj.remote_resource])
-        else:
-            return obj
-
-    function = get_obj(function)
-    args = (get_obj(v) for v in args)
-    kwargs = {k: get_obj(v) for k, v in kwargs.items()}
-
-    result = function(*args, **kwargs)
-    if remote_resource is not None:
-        _remote_objects[remote_resource] = result
-        return None
-    else:
-        return result
