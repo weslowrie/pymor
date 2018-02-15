@@ -151,7 +151,7 @@ class ZMQWorker:
     def eval_loop(self):
         socket = RoutedService(self.ctx, b'EVL', [b'OUT', b'CTL'])
 
-        socket.send_multipart([b'RWORKER'])
+        socket.send_multipart([b'RWK'])
         message = socket.recv_multipart()
         socket.recv_state = True
         assert message == [b'OK']
@@ -179,7 +179,7 @@ class ZMQController:
     def __init__(self, address):
         self.address = address
         self.ctx = zmq.Context()
-        self.initialized = False
+        self.connected = False
         Thread(target=self.ctl_loop).start()
         Thread(target=self.main_loop).start()
         self.cmd_loop()
@@ -202,17 +202,21 @@ class ZMQController:
         while True:
             cmd, *args = socket.recv_multipart()
             print(cmd)
-            if cmd == b'RWORKER':
+            if cmd == b'RWK':
                 assert not args
-                assert not self.initialized
+                assert not self.connected
                 self.worker_paths.append(socket.return_path[:-1])
                 socket.send_multipart([b'OK'])
-            elif cmd == b'INIT':
-                assert not self.initialized
-                self.initialized = True
+            elif cmd == b'CON':
+                assert not self.connected
+                self.connected = True
                 socket.send_multipart([dumps(len(self.worker_paths))])
+            elif cmd == b'DSC':
+                assert self.connected
+                self.connected = False
+                socket.send_multipart([b'OK'])
             elif cmd == b'ABT':
-                assert self.initialized
+                assert self.connected
                 for w in self.worker_paths:
                     worker_socket.send_multipart(format_message(w + [b'CTL'], None, [b'ABT']))
                 socket.send_multipart([b'OK'])
@@ -226,13 +230,13 @@ class ZMQController:
             cmd, *message = socket.recv_multipart()
             print(cmd)
             if cmd == b'APL':
-                assert self.initialized
+                assert self.connected
                 payload, worker = message
                 worker = loads(worker)
                 replies = self.call_workers(worker, payload)
                 socket.send_multipart(replies)
             elif cmd == b'SCT':
-                assert self.initialized
+                assert self.connected
                 payload = message
                 replies = self.call_workers(None, [dumps((_store, (loads(p),), {})) for p in payload])
                 assert len(set(replies)) == 1
@@ -279,28 +283,50 @@ class ZMQPool(WorkerPoolBase):
         super().__init__()
         self.controller_address = controller_address
         self.ctx = ctx or zmq.Context()
-        self.control_socket = RoutedRequest(self.ctx, controller_address, [b'CTL'])
-        self.command_socket = RoutedRequest(self.ctx, controller_address, [b'CMD'])
-        self.control_socket.send_multipart([b'INIT'])
+        self.connected = False
+        self.connect()
+
+    def connect(self):
+        assert not self.connected
+        self.logger.info('Connecting to controller at {}'.format(self.controller_address))
+        self.control_socket = RoutedRequest(self.ctx, self.controller_address, [b'CTL'])
+        self.command_socket = RoutedRequest(self.ctx, self.controller_address, [b'CMD'])
+        self.control_socket.send_multipart([b'CON'])
         self.size = loads(self.control_socket.recv_multipart()[0])
-        self.logger.info('Connected to {} engines'.format(self.size))
         self.command_socket.send_multipart([b'APL', dumps((_setup_worker, (), {})), dumps(None)])
         self.command_socket.recv_multipart()
+        self.logger.info('Connected to {} workers'.format(self.size))
+        self.connected = True
+
+    def disconnect(self):
+        assert self.connected
+        self.logger.info('Disconnecting from controller ...')
+        self.command_socket.send_multipart([b'APL', dumps((_setup_worker, (), {})), dumps(None)])  # clear state
+        self.command_socket.recv_multipart()
+        self.control_socket.send_multipart([b'DSC'])
+        reply = self.control_socket.recv_multipart()
+        assert reply == [b'OK']
+        self.logger.info('Disconnected')
+        self.connected = False
 
     def __len__(self):
+        assert self.connected
         return self.size
 
     def _scatter(self, l):
+        assert self.connected
         self.command_socket.send_multipart([b'SCT'] + [dumps(x) for x in l])
         result = self.command_socket.recv_multipart()
         assert len(set(result)) == 1
         return loads(result[0])
 
     def _remove(self, remote_resource):
+        assert self.connected
         self.command_socket.send_multipart([b'APL', dumps((_remove_object, (remote_resource,), {})), dumps(None)])
         self.command_socket.recv_multipart()
 
     def _apply(self, function, *args, store=False, worker=None, **kwargs):
+        assert self.connected
         assert worker is None or not store
 
         self.command_socket.send_multipart([b'APL',
@@ -320,6 +346,10 @@ class ZMQPool(WorkerPoolBase):
             return loads(result[0])
         else:
             return [loads(r) for r in result]
+
+    def __del__(self):
+        if self.connected:
+            self.disconnect()
 
 
 if __name__ == '__main__':
