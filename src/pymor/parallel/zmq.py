@@ -4,9 +4,9 @@
 
 from itertools import repeat
 from numbers import Number
-import signal
 from threading import Thread
 import threading
+import signal
 import sys
 import time
 import traceback
@@ -90,6 +90,9 @@ class RoutedRequest:
         self.recv_state = False
         return message
 
+    def close(self):
+        self.socket.close()
+
 
 class RoutedService:
 
@@ -116,6 +119,9 @@ class RoutedService:
         message = format_message(self.return_path, None, message)
         self.socket.send_multipart(message)
         self.recv_state = True
+
+    def close(self):
+        self.socket.close()
 
 
 class ZMQWorker:
@@ -146,6 +152,11 @@ class ZMQWorker:
                 sys.stdout.flush()
                 signal.pthread_kill(self.main_thread_id, signal.SIGINT)
                 socket.recv_state = True  # no reply
+            elif cmd == b'QIT':
+                print('Shutting down Worker ..')
+                sys.stdout.flush()
+                signal.pthread_kill(self.main_thread_id, signal.SIGTERM)
+                sys.exit()
             else:
                 raise NotImplementedError
 
@@ -187,9 +198,9 @@ class ZMQController:
         self.address = address
         self.ctx = zmq.Context()
         self.connected = False
-        Thread(target=self.ctl_loop).start()
-        Thread(target=self.main_loop).start()
-        self.cmd_loop()
+        Thread(target=self.cmd_loop, daemon=True).start()
+        Thread(target=self.main_loop, daemon=True).start()
+        self.ctl_loop()
 
     def main_loop(self):
         backend = self.ctx.socket(zmq.ROUTER)
@@ -227,6 +238,12 @@ class ZMQController:
                 for w in self.worker_paths:
                     worker_socket.send_multipart(format_message(w + [b'CTL'], None, [b'ABT']))
                 socket.send_multipart([b'OK'])
+            elif cmd == b'QIT':
+                print('Shutting down workers ...')
+                for w in self.worker_paths:
+                    worker_socket.send_multipart(format_message(w + [b'CTL'], None, [b'QIT']))
+                time.sleep(3)
+                sys.exit()
             else:
                 raise NotImplementedError
 
@@ -329,8 +346,15 @@ class ZMQPool(WorkerPoolBase):
         self.control_socket.send_multipart([b'DSC'])
         reply = self.control_socket.recv_multipart()
         assert reply == [b'OK']
+        self.command_socket.close()
+        self.control_socket.close()
         self.logger.info('Disconnected')
         self.connected = False
+
+    def shutdown(self):
+        self.disconnect()
+        control_socket = RoutedRequest(self.ctx, self.controller_address, [b'CTL'])
+        control_socket.send_multipart([b'QIT'])
 
     def __len__(self):
         assert self.connected
