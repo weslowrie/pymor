@@ -9,6 +9,7 @@ from threading import Thread
 import threading
 import sys
 import time
+import traceback
 
 import zmq
 
@@ -166,10 +167,16 @@ class ZMQWorker:
             print(f)
             try:
                 result = f(*args, **kwargs)
-            except KeyboardInterrupt as e:
+            except KeyboardInterrupt:
                 print('interrupted')
                 sys.stdout.flush()
-                result = e
+                result = None
+            except Exception as e:
+                print('Exception raised during function evaluation:')
+                traceback.print_exc()
+                sys.stdout.flush()
+                result = traceback.TracebackException.from_exception(e)
+                result.exc_traceback = ''
 
             socket.send_multipart([dumps(result)])
 
@@ -277,6 +284,22 @@ class ZMQController:
         return replies
 
 
+class RemoteException(Exception):
+
+    def __init__(self, result):
+        self.result = result
+
+    def __str__(self):
+        msg = ''
+        for i_r, r in enumerate(self.result):
+            if isinstance(r, traceback.TracebackException):
+                msg += '\n\nException on worker {}:\n'.format(i_r)
+                msg += '----------------------\n'
+                for line in r.format():
+                    msg += line
+        return msg
+
+
 class ZMQPool(WorkerPoolBase):
 
     def __init__(self, controller_address, ctx=None):
@@ -334,10 +357,14 @@ class ZMQPool(WorkerPoolBase):
                                             dumps(worker)])
         try:
             result = self.command_socket.recv_multipart()
+            result = [loads(r) for r in result]
+            if any(isinstance(r, traceback.TracebackException) for r in result):
+                raise RemoteException(result)
         except KeyboardInterrupt:
             self.control_socket.send_multipart([b'ABT'])
             self.control_socket.recv_multipart()
             result = self.command_socket.recv_multipart()
+            raise KeyboardInterrupt
 
         if store:
             assert len(set(result)) == 1
