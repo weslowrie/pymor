@@ -44,7 +44,8 @@ def route(frontend, backend):
     poller.register(frontend, zmq.POLLIN)
     poller.register(backend, zmq.POLLIN)
 
-    while True:
+    quit = False
+    while not quit:
         for socket in dict(poller.poll()):
             message = socket.recv_multipart()
             destination, return_path, message = split_message(message)
@@ -53,6 +54,11 @@ def route(frontend, backend):
                 return_path.insert(0, destination.pop(0))
             if socket == frontend:
                 return_path.insert(0, b'OUT')
+
+            if not destination:
+                assert message == [b'QIT']
+                quit = True
+                continue
 
             print('ROUTE:', destination, return_path, str(message)[:32])
 
@@ -63,6 +69,9 @@ def route(frontend, backend):
                 destination_socket = backend
 
             destination_socket.send_multipart(format_message(destination, return_path, message))
+
+    frontend.close()
+    backend.close()
 
 
 class RoutedRequest:
@@ -130,9 +139,15 @@ class ZMQWorker:
         self.controller_address = controller_address
         self.ctx = zmq.Context()
         self.main_thread_id = threading.get_ident()
-        Thread(target=self.main_loop).start()
-        Thread(target=self.ctl_loop).start()
-        self.eval_loop()
+        main_thread = Thread(target=self.main_loop, daemon=True)
+        main_thread.start()
+        ctl_thread = Thread(target=self.ctl_loop, daemon=True)
+        ctl_thread.start()
+        self.evaluating = False
+        self.eval_loop()  # must be main thread in order to abort computations
+        main_thread.join()
+        ctl_thread.join()
+        self.ctx.term()
 
     def main_loop(self):
         frontend = self.ctx.socket(zmq.DEALER)
@@ -150,13 +165,19 @@ class ZMQWorker:
             if cmd == b'ABT':
                 print('Aborting computation ..')
                 sys.stdout.flush()
-                signal.pthread_kill(self.main_thread_id, signal.SIGINT)
-                socket.recv_state = True  # no reply
+                if self.evaluating:
+                    signal.pthread_kill(self.main_thread_id, signal.SIGINT)
+                socket.send_multipart([b'OK'])
             elif cmd == b'QIT':
                 print('Shutting down Worker ..')
                 sys.stdout.flush()
-                signal.pthread_kill(self.main_thread_id, signal.SIGTERM)
-                sys.exit()
+                socket.send_multipart([b'OK'])
+                if self.evaluating:
+                    signal.pthread_kill(self.main_thread_id, signal.SIGINT)
+                socket.socket.send_multipart(format_message([b'EVL'], None, [b'QIT']))
+                socket.socket.send_multipart(format_message([], None, [b'QIT']))
+                socket.close()
+                break
             else:
                 raise NotImplementedError
 
@@ -172,12 +193,18 @@ class ZMQWorker:
         while True:
             message = socket.recv_multipart()
             assert len(message) == 1
+
+            if message == [b'QIT']:
+                break
+
             payload = loads(message[0])
 
             f, args, kwargs = payload
             print(f)
             try:
+                self.evaluating = True
                 result = f(*args, **kwargs)
+                self.evaluating = False
             except KeyboardInterrupt:
                 print('interrupted')
                 sys.stdout.flush()
@@ -191,6 +218,8 @@ class ZMQWorker:
 
             socket.send_multipart([dumps(result)])
 
+        socket.close()
+
 
 class ZMQController:
 
@@ -198,9 +227,14 @@ class ZMQController:
         self.address = address
         self.ctx = zmq.Context()
         self.connected = False
-        Thread(target=self.cmd_loop, daemon=True).start()
-        Thread(target=self.main_loop, daemon=True).start()
+        cmd_thread = Thread(target=self.cmd_loop, daemon=True)
+        cmd_thread.start()
+        main_thread = Thread(target=self.main_loop, daemon=True)
+        main_thread.start()
         self.ctl_loop()
+        cmd_thread.join()
+        main_thread.join()
+        self.ctx.term()
 
     def main_loop(self):
         backend = self.ctx.socket(zmq.ROUTER)
@@ -213,9 +247,6 @@ class ZMQController:
     def ctl_loop(self):
         self.worker_paths = []
         socket = RoutedService(self.ctx, b'CTL')
-        worker_socket = self.ctx.socket(zmq.DEALER)
-        worker_socket.identity = b'WRKCTL'
-        worker_socket.connect('inproc://backend')
 
         while True:
             cmd, *args = socket.recv_multipart()
@@ -235,17 +266,19 @@ class ZMQController:
                 socket.send_multipart([b'OK'])
             elif cmd == b'ABT':
                 assert self.connected
-                for w in self.worker_paths:
-                    worker_socket.send_multipart(format_message(w + [b'CTL'], None, [b'ABT']))
+                self.call_workers(b'CTL', None, [b'ABT'])
                 socket.send_multipart([b'OK'])
             elif cmd == b'QIT':
                 print('Shutting down workers ...')
-                for w in self.worker_paths:
-                    worker_socket.send_multipart(format_message(w + [b'CTL'], None, [b'QIT']))
-                time.sleep(3)
-                sys.exit()
+                self.call_workers(b'CTL', None, [b'QIT'])
+                socket.send_multipart([b'OK'])
+                socket.socket.send_multipart(format_message([b'CMD'], None, [b'QIT']))
+                socket.socket.send_multipart(format_message([], None, [b'QIT']))
+                break
             else:
                 raise NotImplementedError
+
+        socket.close()
 
     def cmd_loop(self):
         socket = RoutedService(self.ctx, b'CMD')
@@ -257,32 +290,36 @@ class ZMQController:
                 assert self.connected
                 payload, worker = message
                 worker = loads(worker)
-                replies = self.call_workers(worker, payload)
+                replies = self.call_workers(b'EVL', worker, [payload])
                 socket.send_multipart(replies)
             elif cmd == b'SCT':
                 assert self.connected
                 payload = message
-                replies = self.call_workers(None, [dumps((_store, (loads(p),), {})) for p in payload])
+                replies = self.call_workers(b'EVL', None, [[dumps((_store, (loads(p),), {})) for p in payload]])
                 assert len(set(replies)) == 1
                 socket.send_multipart([replies[0]])
+            elif cmd == b'QIT':
+                break
             else:
                 raise NotImplementedError
 
-    def call_workers(self, worker, message):
-        socket = self.ctx.socket(zmq.DEALER)
-        socket.identity = b'WRK'
-        socket.connect('inproc://backend')
+        socket.close()
 
+    def call_workers(self, service, worker, message):
         if worker is None:
             worker = range(len(self.worker_paths))
         elif isinstance(worker, Number):
             worker = [worker]
-        if isinstance(message, bytes):
+        if isinstance(message[0], bytes):
             message = repeat(message)
+
+        socket = self.ctx.socket(zmq.DEALER)
+        socket.identity = b'WRK' + service
+        socket.connect('inproc://backend')
 
         print('Sending messages to workers ...')
         for w, msg in zip(worker, message):
-            socket.send_multipart(format_message(self.worker_paths[w] + [b'EVL'], None, [msg]))
+            socket.send_multipart(format_message(self.worker_paths[w] + [service], None, msg))
 
         print('Waiting for replies ', end='')
         replies = [None] * len(worker)
@@ -297,6 +334,8 @@ class ZMQController:
             missing.remove(i)
             print(i, end='')
             sys.stdout.flush()
+
+        socket.close()
 
         return replies
 
@@ -355,6 +394,8 @@ class ZMQPool(WorkerPoolBase):
         self.disconnect()
         control_socket = RoutedRequest(self.ctx, self.controller_address, [b'CTL'])
         control_socket.send_multipart([b'QIT'])
+        control_socket.recv_multipart()
+        control_socket.close()
 
     def __len__(self):
         assert self.connected
