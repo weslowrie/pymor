@@ -4,10 +4,15 @@
 
 from itertools import repeat
 from numbers import Number
+import os
 from threading import Thread
 import threading
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
+import time
 import traceback
 
 import zmq
@@ -346,6 +351,35 @@ class RemoteException(Exception):
         return msg
 
 
+class new_zmq_pool(BasicInterface):
+
+    def __init__(self, num_workers=None, wait=3):
+        self.num_workers = num_workers
+        self.wait = wait
+
+    def __enter__(self):
+        self.logger.info('Spawning controller and {} workers'.format(self.num_workers))
+
+        self.tempdir = tempfile.mkdtemp()
+        path = 'ipc://' + os.path.join(self.tempdir, 'zmqpool')
+
+        for _ in range(self.num_workers):
+            subprocess.Popen('python -m pymor.parallel.zmq worker ' + path,
+                             start_new_session=True, shell=True)
+        subprocess.Popen('python -m pymor.parallel.zmq controller ' + path,
+                         start_new_session=True, shell=True)
+
+        self.logger.info('Waiting for workers to connect ...')
+        time.sleep(self.wait)
+
+        self.pool = ZMQPool(path)
+        return self.pool
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.pool.shutdown()
+        shutil.rmtree(self.tempdir)
+
+
 class ZMQPool(WorkerPoolBase):
 
     def __init__(self, controller_address, ctx=None):
@@ -386,6 +420,7 @@ class ZMQPool(WorkerPoolBase):
         control_socket.send_multipart([b'QIT'])
         control_socket.recv_multipart()
         control_socket.close()
+        self.ctx.term()
 
     def __len__(self):
         assert self.connected
@@ -415,11 +450,11 @@ class ZMQPool(WorkerPoolBase):
             result = [loads(r) for r in result]
             if any(isinstance(r, traceback.TracebackException) for r in result):
                 raise RemoteException(result)
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as e:
             self.control_socket.send_multipart([b'ABT'])
             self.control_socket.recv_multipart()
             result = self.command_socket.recv_multipart()
-            raise KeyboardInterrupt
+            raise e
 
         if store:
             assert len(set(result)) == 1
