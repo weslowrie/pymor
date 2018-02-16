@@ -48,12 +48,6 @@ Options:
 
   -h, --help                      Show this message.
 
-  --ipython-engines=COUNT         If positive, the number of IPython cluster engines to use for
-                                  parallel greedy search. If zero, no parallelization is performed.
-                                  [default: 0]
-
-  --ipython-profile=PROFILE       IPython profile to use for parallelization.
-
   --list-vector-array             Solve using ListVectorArray[NumpyVector] instead of NumpyVectorArray.
 
   --order=ORDER                   Polynomial order of the Lagrange finite elements to use in FEniCS
@@ -78,6 +72,12 @@ Options:
                                   [default: 10].
 
   --greedy-without-estimator      Do not use error estimator for basis generation.
+
+  --parallel-backend=BACKEND      Use BACKEND for parallelization of greedy search.
+
+  --num-workers=COUNT             The number of worker processes to use in parallel greedy search.
+
+  --ipython-profile=PROFILE       IPython profile to use for parallelization.
 """
 
 import sys
@@ -94,7 +94,9 @@ def main(args):
 
     args = parse_arguments(args)
 
-    pool = new_parallel_pool(ipython_num_engines=args['--ipython-engines'], ipython_profile=args['--ipython-profile'])
+    pool = new_parallel_pool(num_workers=args['--num-workers'],
+                             ipython_profile=args['--ipython-profile'],
+                             backend=args['--parallel-backend'])
 
     if args['--fenics']:
         d, d_summary = discretize_fenics(args['XBLOCKS'], args['YBLOCKS'], args['--grid'], args['--order'])
@@ -216,7 +218,7 @@ def parse_arguments(args):
     args['--cache-region'] = args['--cache-region'].lower()
     args['--extension-alg'] = args['--extension-alg'].lower()
     args['--grid'] = int(args['--grid'])
-    args['--ipython-engines'] = int(args['--ipython-engines'])
+    args['--num-workers'] = int(args['--num-workers']) if args['--num-workers'] else None
     args['--order'] = int(args['--order'])
     args['--product'] = args['--product'].lower()
     args['--reductor'] = args['--reductor'].lower()

@@ -69,9 +69,9 @@ Options:
 
   --vy=YSPEED                     Speed in y-direction [default: 1].
 
-  --ipython-engines=COUNT         If positive, the number of IPython cluster engines to use
-                                  for parallel greedy search. If zero, no parallelization
-                                  is performed. [default: 0]
+  --parallel-backend=BACKEND      Use BACKEND for parallelization of greedy search.
+
+  --num-workers=COUNT             The number of worker processes to use in parallel greedy search.
 
   --ipython-profile=PROFILE       IPython profile to use for parallelization.
 """
@@ -92,6 +92,8 @@ from pymor.grids.tria import TriaGrid
 from pymor.parallel.default import new_parallel_pool
 from pymor.reductors.basic import GenericRBReductor
 
+from pymor.core.logger import set_log_levels
+set_log_levels({'pymor.parallel.zmq': 'DEBUG'})
 
 def main(args):
     args = docopt(__doc__, args)
@@ -111,7 +113,7 @@ def main(args):
     args['--test'] = int(args['--test'])
     args['--vx'] = float(args['--vx'])
     args['--vy'] = float(args['--vy'])
-    args['--ipython-engines'] = int(args['--ipython-engines'])
+    args['--num-workers'] = int(args['--num-workers']) if args['--num-workers'] else None
     args['EXP_MIN'] = int(args['EXP_MIN'])
     args['EXP_MAX'] = int(args['EXP_MAX'])
     args['EI_SNAPSHOTS'] = int(args['EI_SNAPSHOTS'])
@@ -153,7 +155,9 @@ def main(args):
             legend = legend + ('exponent: {}'.format(mu['exponent']),)
         d.visualize(Us, legend=legend, title='Detailed Solutions', block=True)
 
-    pool = new_parallel_pool(ipython_num_engines=args['--ipython-engines'], ipython_profile=args['--ipython-profile'])
+    pool = new_parallel_pool(num_workers=args['--num-workers'],
+                             ipython_profile=args['--ipython-profile'],
+                             backend=args['--parallel-backend'])
     ei_d, ei_data = interpolate_operators(d, ['operator'],
                                           d.parameter_space.sample_uniformly(args['EI_SNAPSHOTS']),  # NOQA
                                           error_norm=d.l2_norm,

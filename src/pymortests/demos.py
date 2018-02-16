@@ -206,7 +206,20 @@ def test_thermalblock_ipython(demo_args):
     if mpi.parallel:  # simply running 'ipcluster start' (without any profile) does not seem to work
         return        # when running under mpirun, so we do not test this combination for now
     try:
-        test_demos((demo_args[0], ['--ipython-engines=2'] + demo_args[1]))
+        test_demos((demo_args[0], ['--num-workers=2', '--parallel-backend=ipython'] + demo_args[1]))
+    finally:
+        import time     # there seems to be no way to shutdown the IPyhton cluster s.t. a new
+        time.sleep(10)  # cluster can be started directly afterwards, so we have to wait ...
+
+
+def test_thermalblock_zmq(demo_args):
+    if demo_args[0] != 'pymordemos.thermalblock':
+        return
+    from pymor.tools import mpi
+    if mpi.parallel:  # simply running 'ipcluster start' (without any profile) does not seem to work
+        return        # when running under mpirun, so we do not test this combination for now
+    try:
+        test_demos((demo_args[0], ['--num-workers=2', '--parallel-backend=zmq'] + demo_args[1]))
     finally:
         import time     # there seems to be no way to shutdown the IPyhton cluster s.t. a new
         time.sleep(10)  # cluster can be started directly afterwards, so we have to wait ...
