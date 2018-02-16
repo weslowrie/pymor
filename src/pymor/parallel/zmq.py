@@ -8,11 +8,11 @@ from threading import Thread
 import threading
 import signal
 import sys
-import time
 import traceback
 
 import zmq
 
+from pymor.core.interfaces import BasicInterface
 from pymor.core.pickle import dumps, loads
 from pymor.parallel.basic import (WorkerPoolBase, _setup_worker, _store, _remove_object, _worker_call_function)
 
@@ -37,50 +37,7 @@ def format_message(destination, return_path, message):
     return destination + [b''] + return_path + [b''] + message
 
 
-def route(frontend, backend):
-    assert frontend.type in [zmq.ROUTER, zmq.DEALER]
-    assert backend.type == zmq.ROUTER
-    poller = zmq.Poller()
-    poller.register(frontend, zmq.POLLIN)
-    poller.register(backend, zmq.POLLIN)
-
-    quit = False
-    while not quit:
-        for socket in dict(poller.poll()):
-            message = socket.recv_multipart()
-            destination, return_path, message = split_message(message)
-
-            if socket.type == zmq.ROUTER:
-                return_path.insert(0, destination.pop(0))
-            if socket == frontend:
-                return_path.insert(0, b'OUT')
-
-            if not destination:
-                assert message == [b'QIT']
-                quit = True
-                continue
-
-            print('ROUTE:', destination, return_path, str(message)[:32])
-
-            if destination[0] == b'OUT':
-                destination.pop(0)
-                destination_socket = frontend
-            else:
-                destination_socket = backend
-
-            destination_socket.send_multipart(format_message(destination, return_path, message))
-
-    frontend.close()
-    backend.close()
-
-
-class RoutedRequest:
-
-    def __init__(self, ctx, address, path):
-        self.address, self.path = address, path
-        self.socket = ctx.socket(zmq.DEALER)
-        self.socket.connect(address)
-        self.recv_state = False
+class RoutedSocket:
 
     def send_multipart(self, message):
         if self.recv_state:
@@ -95,66 +52,103 @@ class RoutedRequest:
         message = self.socket.recv_multipart()
         destination, return_path, message = split_message(message)
         assert destination == []
-        assert return_path == self.path
-        self.recv_state = False
-        return message
-
-    def close(self):
-        self.socket.close()
-
-
-class RoutedService:
-
-    def __init__(self, ctx, identity, initial_return_path=None):
-        self.socket = ctx.socket(zmq.DEALER)
-        self.socket.identity = self.identity = identity
-        self.socket.connect('inproc://backend')
-        self.return_path = initial_return_path
-        self.recv_state = initial_return_path is None
-
-    def recv_multipart(self):
-        if not self.recv_state:
-            raise ValueError('Not in receive state')
-        message = self.socket.recv_multipart()
-        destination, return_path, message = split_message(message)
-        assert destination == []
         self.return_path = return_path
         self.recv_state = False
         return message
 
-    def send_multipart(self, message):
-        if self.recv_state:
-            raise ValueError('Not in send state')
-        message = format_message(self.return_path, None, message)
-        self.socket.send_multipart(message)
-        self.recv_state = True
-
     def close(self):
         self.socket.close()
 
 
-class ZMQWorker:
+class RoutedRequest(RoutedSocket):
+
+    def __init__(self, ctx, address, path):
+        self.address, self.path = address, path
+        self.socket = ctx.socket(zmq.DEALER)
+        self.socket.connect(address)
+        self.recv_state = False
+
+
+class RoutedService(RoutedSocket):
+
+    def __init__(self, ctx, identity, initial_path=None):
+        self.socket = ctx.socket(zmq.DEALER)
+        self.socket.identity = self.identity = identity
+        self.socket.connect('inproc://backend')
+        self.path = initial_path
+        self.recv_state = initial_path is None
+
+    def recv_multipart(self):
+        result = super().recv_multipart()
+        self.path = self.return_path
+        return result
+
+
+class ZMQNode(BasicInterface):
+
+    def __init__(self, routing_address, routing_is_child):
+        self.routing_address, self.routing_is_child = routing_address, routing_is_child
+        self.ctx = zmq.Context()
+        self.route_thread = Thread(target=self.route_loop)
+        self.route_thread.start()
+
+    def route_loop(self):
+        if self.routing_is_child:
+            frontend = self.ctx.socket(zmq.DEALER)
+            frontend.connect(self.routing_address)
+        else:
+            frontend = self.ctx.socket(zmq.ROUTER)
+            frontend.bind(self.routing_address)
+
+        backend = self.ctx.socket(zmq.ROUTER)
+        backend.bind('inproc://backend')
+
+        poller = zmq.Poller()
+        poller.register(frontend, zmq.POLLIN)
+        poller.register(backend, zmq.POLLIN)
+
+        quit = False
+        while not quit:
+            for socket in dict(poller.poll()):
+                message = socket.recv_multipart()
+                destination, return_path, message = split_message(message)
+
+                if socket.type == zmq.ROUTER:
+                    return_path.insert(0, destination.pop(0))
+                if socket == frontend:
+                    return_path.insert(0, b'OUT')
+
+                if not destination:
+                    assert message == [b'QIT']
+                    quit = True
+                    continue
+
+                self.logger.debug('Route from={}, to={}, packets={}'.format(destination, return_path, len(message)))
+
+                if destination[0] == b'OUT':
+                    destination.pop(0)
+                    destination_socket = frontend
+                else:
+                    destination_socket = backend
+
+                destination_socket.send_multipart(format_message(destination, return_path, message))
+
+        frontend.close()
+        backend.close()
+
+
+class ZMQWorker(ZMQNode):
 
     def __init__(self, controller_address):
-        self.controller_address = controller_address
-        self.ctx = zmq.Context()
+        super().__init__(controller_address, True)
         self.main_thread_id = threading.get_ident()
-        main_thread = Thread(target=self.main_loop, daemon=True)
-        main_thread.start()
         ctl_thread = Thread(target=self.ctl_loop, daemon=True)
         ctl_thread.start()
         self.evaluating = False
         self.eval_loop()  # must be main thread in order to abort computations
-        main_thread.join()
+        self.route_thread.join()
         ctl_thread.join()
         self.ctx.term()
-
-    def main_loop(self):
-        frontend = self.ctx.socket(zmq.DEALER)
-        frontend.connect(self.controller_address)
-        backend = self.ctx.socket(zmq.ROUTER)
-        backend.bind('inproc://backend')
-        route(frontend, backend)
 
     def ctl_loop(self):
         socket = RoutedService(self.ctx, b'CTL')
@@ -188,7 +182,7 @@ class ZMQWorker:
         message = socket.recv_multipart()
         socket.recv_state = True
         assert message == [b'OK']
-        print('Registration with controller successful!')
+        self.logger.info('Registration with controller successful!')
 
         while True:
             message = socket.recv_multipart()
@@ -200,7 +194,7 @@ class ZMQWorker:
             payload = loads(message[0])
 
             f, args, kwargs = payload
-            print(f)
+            self.logger.debug('Calling {}'.format(f.__name__))
             try:
                 self.evaluating = True
                 result = f(*args, **kwargs)
@@ -221,28 +215,17 @@ class ZMQWorker:
         socket.close()
 
 
-class ZMQController:
+class ZMQController(ZMQNode):
 
     def __init__(self, address):
-        self.address = address
-        self.ctx = zmq.Context()
+        super().__init__(address, False)
         self.connected = False
-        cmd_thread = Thread(target=self.cmd_loop, daemon=True)
+        cmd_thread = Thread(target=self.cmd_loop)
         cmd_thread.start()
-        main_thread = Thread(target=self.main_loop, daemon=True)
-        main_thread.start()
         self.ctl_loop()
+        self.route_thread.join()
         cmd_thread.join()
-        main_thread.join()
         self.ctx.term()
-
-    def main_loop(self):
-        backend = self.ctx.socket(zmq.ROUTER)
-        backend.bind('inproc://backend')
-        time.sleep(1)
-        frontend = self.ctx.socket(zmq.ROUTER)
-        frontend.bind(self.address)
-        route(frontend, backend)
 
     def ctl_loop(self):
         self.worker_paths = []
@@ -250,26 +233,29 @@ class ZMQController:
 
         while True:
             cmd, *args = socket.recv_multipart()
-            print(cmd)
             if cmd == b'RWK':
                 assert not args
                 assert not self.connected
+                self.logger.info('Registered worker: {}'.format(socket.return_path[:-1]))
                 self.worker_paths.append(socket.return_path[:-1])
                 socket.send_multipart([b'OK'])
             elif cmd == b'CON':
                 assert not self.connected
                 self.connected = True
+                self.logger.info('Poll frontend connected')
                 socket.send_multipart([dumps(len(self.worker_paths))])
             elif cmd == b'DSC':
                 assert self.connected
                 self.connected = False
+                self.logger.info('Pool frontend disconnected')
                 socket.send_multipart([b'OK'])
             elif cmd == b'ABT':
                 assert self.connected
+                self.logger.info('Aborting computation')
                 self.call_workers(b'CTL', None, [b'ABT'])
                 socket.send_multipart([b'OK'])
             elif cmd == b'QIT':
-                print('Shutting down workers ...')
+                self.logger.info('Shutting down workers ...')
                 self.call_workers(b'CTL', None, [b'QIT'])
                 socket.send_multipart([b'OK'])
                 socket.socket.send_multipart(format_message([b'CMD'], None, [b'QIT']))
@@ -285,15 +271,16 @@ class ZMQController:
 
         while True:
             cmd, *message = socket.recv_multipart()
-            print(cmd)
             if cmd == b'APL':
                 assert self.connected
                 payload, worker = message
                 worker = loads(worker)
+                self.logger.debug('Applying function on workers: {}'.format('ALL' if worker is None else worker))
                 replies = self.call_workers(b'EVL', worker, [payload])
                 socket.send_multipart(replies)
             elif cmd == b'SCT':
                 assert self.connected
+                self.logger.debug('Scattering data.')
                 payload = message
                 replies = self.call_workers(b'EVL', None, [[dumps((_store, (loads(p),), {}))] for p in payload])
                 assert len(set(replies)) == 1
@@ -317,24 +304,23 @@ class ZMQController:
         socket.identity = b'WRK' + service
         socket.connect('inproc://backend')
 
-        print('Sending messages to workers ...')
         for w, msg in zip(worker, message):
             socket.send_multipart(format_message(self.worker_paths[w] + [service], None, msg))
 
-        print('Waiting for replies ', end='')
         replies = [None] * len(worker)
         missing = set(worker)
 
         while missing:
+            self.logger.debug('Waiting for replies from workers: {}'.format(list(sorted(missing))))
             destination, return_path, message = split_message(socket.recv_multipart())
             assert destination == []
             assert len(message) == 1
             i = self.worker_paths.index(return_path[:-1])
             replies[worker.index(i)] = message[0]
             missing.remove(i)
-            print(i, end='')
             sys.stdout.flush()
 
+        self.logger.debug('Received replies from all workers.')
         socket.close()
 
         return replies
@@ -446,6 +432,7 @@ class ZMQPool(WorkerPoolBase):
 
 if __name__ == '__main__':
     import docopt
+    from pymor.parallel.zmq import ZMQController, ZMQWorker
     args = docopt.docopt("""
 Usage:
     zmq.py controller [CONTROLLER_ADDRESS]
