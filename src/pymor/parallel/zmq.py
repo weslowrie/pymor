@@ -295,7 +295,7 @@ class ZMQController:
             elif cmd == b'SCT':
                 assert self.connected
                 payload = message
-                replies = self.call_workers(b'EVL', None, [[dumps((_store, (loads(p),), {})) for p in payload]])
+                replies = self.call_workers(b'EVL', None, [[dumps((_store, (loads(p),), {}))] for p in payload])
                 assert len(set(replies)) == 1
                 socket.send_multipart([replies[0]])
             elif cmd == b'QIT':
@@ -433,11 +433,11 @@ class ZMQPool(WorkerPoolBase):
 
         if store:
             assert len(set(result)) == 1
-            return loads(result[0])
+            return result[0]
         elif isinstance(worker, Number):
-            return loads(result[0])
+            return result[0]
         else:
-            return [loads(r) for r in result]
+            return result
 
     def __del__(self):
         if self.connected:
