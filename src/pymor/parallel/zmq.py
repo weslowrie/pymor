@@ -231,39 +231,43 @@ class ZMQController(ZMQNode):
         self.worker_paths = []
         socket = RoutedService(self.ctx, b'CTL')
 
-        while True:
-            cmd, *args = socket.recv_multipart()
-            if cmd == b'RWK':
-                assert not args
-                assert not self.connected
-                self.logger.info('Registered worker: {}'.format(socket.return_path[:-1]))
-                self.worker_paths.append(socket.return_path[:-1])
-                socket.send_multipart([b'OK'])
-            elif cmd == b'CON':
-                assert not self.connected
-                self.connected = True
-                self.logger.info('Poll frontend connected')
-                socket.send_multipart([dumps(len(self.worker_paths))])
-            elif cmd == b'DSC':
-                assert self.connected
-                self.connected = False
-                self.logger.info('Pool frontend disconnected')
-                socket.send_multipart([b'OK'])
-            elif cmd == b'ABT':
-                assert self.connected
-                self.logger.info('Aborting computation')
-                self.call_workers(b'CTL', None, [b'ABT'])
-                socket.send_multipart([b'OK'])
-            elif cmd == b'QIT':
-                self.logger.info('Shutting down workers ...')
-                self.call_workers(b'CTL', None, [b'QIT'])
-                socket.send_multipart([b'OK'])
-                socket.socket.send_multipart(format_message([b'CMD'], None, [b'QIT']))
-                socket.socket.send_multipart(format_message([], None, [b'QIT']))
-                break
-            else:
-                raise NotImplementedError
+        try:
+            while True:
+                cmd, *args = socket.recv_multipart()
+                if cmd == b'RWK':
+                    assert not args
+                    assert not self.connected
+                    self.logger.info('Registered worker: {}'.format(socket.return_path[:-1]))
+                    self.worker_paths.append(socket.return_path[:-1])
+                    socket.send_multipart([b'OK'])
+                elif cmd == b'CON':
+                    assert not self.connected
+                    self.connected = True
+                    self.logger.info('Poll frontend connected')
+                    socket.send_multipart([dumps(len(self.worker_paths))])
+                elif cmd == b'DSC':
+                    assert self.connected
+                    self.connected = False
+                    self.logger.info('Pool frontend disconnected')
+                    socket.send_multipart([b'OK'])
+                elif cmd == b'ABT':
+                    assert self.connected
+                    self.logger.info('Aborting computation')
+                    self.call_workers(b'CTL', None, [b'ABT'])
+                    socket.send_multipart([b'OK'])
+                elif cmd == b'QIT':
+                    socket.send_multipart([b'OK'])
+                    break
+                else:
+                    raise NotImplementedError
 
+        except KeyboardInterrupt:
+            pass
+
+        self.logger.info('Shutting down workers ...')
+        self.call_workers(b'CTL', None, [b'QIT'])
+        socket.socket.send_multipart(format_message([b'CMD'], None, [b'QIT']))
+        socket.socket.send_multipart(format_message([], None, [b'QIT']))
         socket.close()
 
     def cmd_loop(self):
@@ -433,6 +437,7 @@ class ZMQPool(WorkerPoolBase):
 if __name__ == '__main__':
     import docopt
     from pymor.parallel.zmq import ZMQController, ZMQWorker
+
     args = docopt.docopt("""
 Usage:
     zmq.py controller [CONTROLLER_ADDRESS]
