@@ -42,12 +42,6 @@ Options:
   --test=COUNT               Use COUNT snapshots for stochastic error estimation
                              [default: 10].
 
-  --ipython-engines=COUNT    If positive, the number of IPython cluster engines to use for
-                             parallel greedy search. If zero, no parallelization is performed.
-                             [default: 0]
-
-  --ipython-profile=PROFILE  IPython profile to use for parallelization.
-
   --cache-region=REGION      Name of cache region to use for caching solution snapshots
                              (NONE, MEMORY, DISK, PERSISTENT)
                              [default: NONE]
@@ -65,6 +59,12 @@ Options:
                              [default: 0.2].
 
   --theta=VALUE              Ratio of elements to refine [default: 0.].
+
+  --parallel-backend=BACKEND      Use BACKEND for parallelization of greedy search.
+
+  --num-workers=COUNT             The number of worker processes to use in parallel greedy search.
+
+  --ipython-profile=PROFILE       IPython profile to use for parallelization.
 """
 
 import sys
@@ -86,7 +86,7 @@ def thermalblock_demo(args):
     args['--grid'] = int(args['--grid'])
     args['RBSIZE'] = int(args['RBSIZE'])
     args['--test'] = int(args['--test'])
-    args['--ipython-engines'] = int(args['--ipython-engines'])
+    args['--num-workers'] = int(args['--num-workers']) if args['--num-workers'] else None
     args['--extension-alg'] = args['--extension-alg'].lower()
     assert args['--extension-alg'] in {'trivial', 'gram_schmidt'}
     args['--product'] = args['--product'].lower()
@@ -141,7 +141,10 @@ def thermalblock_demo(args):
                                                          coercivity_estimator=coercivity_estimator)}
     reductor = reductors[args['--reductor']]
 
-    pool = new_parallel_pool(ipython_num_engines=args['--ipython-engines'], ipython_profile=args['--ipython-profile'])
+    pool = new_parallel_pool(num_workers=args['--num-workers'],
+                             ipython_profile=args['--ipython-profile'],
+                             backend=args['--parallel-backend'])
+
     greedy_data = adaptive_greedy(
         d, reductor,
         validation_mus=args['--validation-mus'],
