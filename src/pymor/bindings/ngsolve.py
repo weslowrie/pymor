@@ -157,7 +157,7 @@ if config.HAVE_NGSOLVE:
                 if isinstance(op, ZeroOperator):
                     continue
                 matrix.AsVector().data += float(c) * op.matrix.AsVector()
-            return NGSolveMatrixOperator(matrix, self.range, self.source, solver_options=solver_options, name=name)
+            return NGSolveMatrixOperator(matrix, self.range, self.source, solver_options=solver_options, free_dofs=operators[0].free_dofs, name=name)
 
         def as_vector(self, copy=True):
             vec = self.matrix.AsVector().FV().NumPy()
