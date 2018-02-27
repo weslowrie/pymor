@@ -193,3 +193,37 @@ if config.HAVE_NGSOLVE:
 
             for u, name in zip(U, legend):
                 ngs.Draw(u._list[0].impl, self.mesh, name=name)
+
+    def visualize_arrays_vtk(arrays, filename, names=None, subdivision=0):
+        mesh = arrays[0].space.V.mesh
+        assert all(U.space.V.mesh == mesh for U in arrays)
+        if not names:
+            names = ['U{}'.format(i) for i in range(len(arrays))]
+        assert len(arrays) == len(names)
+        assert all(len(U) == len(arrays[0]) for U in arrays)
+
+        gfs = [U.zeros()._list[0].impl for U in arrays]
+        all_gfs = []
+        all_names = []
+        for gf, name in zip(gfs, names):
+            if gf.components:  # multi-component GridFunctions do not seem to be handled correctly by NGSolve ATM
+                all_gfs.extend(gf.components)
+                all_names.extend(['{}_{}'.format(name, i) for i in range(len(gf.components))])
+            else:
+                all_gfs.append(gf)
+                all_names.append(name)
+
+        vtk = ngs.VTKOutput(ma=mesh, coefs=all_gfs, names=all_names, filename=filename, subdivision=subdivision)
+
+        for i in range(len(arrays[0])):
+            gf_iter = iter(all_gfs)
+            for U in arrays:
+                gf_data = U._list[i].impl
+                if gf_data.components:
+                    for c in gf_data.components:
+                        next(gf_iter).vec.data = c.vec
+                else:
+                    next(gf_iter).vec.data = gf_data.vec
+            vtk.Do()
+
+        del all_gfs
