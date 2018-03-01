@@ -8,7 +8,7 @@ from numbers import Number
 
 from pymor.core.interfaces import ImmutableInterface
 from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
-from pymor.parallel.interfaces import RemotePath
+from pymor.parallel.interfaces import RemotePath, RemoteObjectBase
 
 
 class VirtualPool(WorkerPoolBase):
@@ -30,6 +30,8 @@ class VirtualPool(WorkerPoolBase):
             for j in range(s):
                 global_to_local_ids.append((i, j))
             pos += s
+        self.local_to_global_ids_r = pool.push(local_to_global_ids)
+        self.global_to_local_ids_r = pool.push(global_to_local_ids)
 
     def __len__(self):
         return self.size
@@ -87,6 +89,21 @@ class VirtualPool(WorkerPoolBase):
         else:
             return list(chain(*result))
 
+    def communicate(self, source, destination):
+        assert isinstance(source, RemoteObjectBase)
+        assert isinstance(destination, RemoteObjectBase)
+
+        source = self._map_obj(source)
+        source = RemotePath(source.remote_resource, source.path)
+        destination = self._map_obj(destination)
+        destination = RemotePath(destination.remote_resource, destination.path)
+
+        physical_src = self.pool.apply(_prepare_communication, source, self.local_sizes_r, self.global_to_local_ids_r,
+                                       store=True)
+        physical_dst = self.pool.push({})
+        self.pool.communicate(physical_src, physical_dst)
+        self.pool.apply(_finish_communication, physical_dst, destination, self.local_sizes_r, self.local_to_global_ids_r)
+
 
 class DistributedObjectWithPath:
 
@@ -131,3 +148,33 @@ def _apply(*args, function_=None, store_=False, worker_=None, **kwargs):
         return DistributedObjectWithPath(result)
     else:
         return result
+
+
+def _prepare_communication(src, worker_, global_to_local_ids):
+    assert isinstance(src, DistributedObjectWithPath)
+
+    physical_src = {}
+    for w in range(worker_):
+        s = src.resolve_path(w)
+        if not isinstance(s, dict):
+            raise ValueError('Source not a dictionary.')
+        for d, v in s.items():
+            physical_id, local_id = global_to_local_ids[d]
+            if physical_id not in physical_src:
+                physical_src[physical_id] = {}
+            if local_id not in physical_src[physical_id]:
+                physical_src[physical_id][local_id] = {}
+            physical_src[physical_id][local_id][w] = v
+
+    return physical_src
+
+
+def _finish_communication(physical_dst, dst, worker_, local_to_global_ids):
+    assert isinstance(dst, DistributedObjectWithPath)
+    dsts = [dst.resolve_path(w) for w in range(worker_)]
+    assert all(isinstance(d, dict) for d in dsts)
+
+    for src_physical_id, d in physical_dst.items():
+        for dst_local_id, dd in d.items():
+            for src_local_id, v in dd.items():
+                dsts[dst_local_id][local_to_global_ids[src_physical_id][src_local_id]] = v
