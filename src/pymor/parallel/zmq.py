@@ -130,7 +130,7 @@ class ZMQNode(BasicInterface):
                     quit = True
                     continue
 
-                self.logger.debug('Route from={}, to={}, packets={}'.format(destination, return_path, len(message)))
+                self.logger.debug('Route from={}, to={}, packets={}'.format(return_path, destination, len(message)))
 
                 if destination[0] == b'OUT':
                     destination.pop(0)
@@ -250,7 +250,7 @@ class ZMQController(ZMQNode):
                 elif cmd == b'CON':
                     assert not self.connected
                     self.connected = True
-                    self.logger.info('Poll frontend connected')
+                    self.logger.info('Pool frontend connected')
                     socket.send_multipart([dumps(len(self.worker_paths))])
                 elif cmd == b'DSC':
                     assert self.connected
@@ -329,7 +329,6 @@ class ZMQController(ZMQNode):
             i = self.worker_paths.index(return_path[:-1])
             replies[worker.index(i)] = message[0]
             missing.remove(i)
-            sys.stdout.flush()
 
         self.logger.debug('Received replies from all workers.')
         socket.close()
