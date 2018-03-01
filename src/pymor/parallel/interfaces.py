@@ -169,6 +169,29 @@ class WorkerPoolInterface(BasicInterface):
         """
         pass
 
+    @abstractmethod
+    def communicate(self, source, destination):
+        """Worker-to-worker communication
+
+        `source` and `destination` must be |RemoteObjects| referring to
+        dictionaries. The keys of `source` are the ids of the workers
+        to which the corresponding value is communicated. On the receiving
+        worker, the value is stored in the `destination` dictionary with
+        the sender id as key.
+
+        The `destination` dictionaries will be cleared before communication
+        is initiated.
+
+        Parameters
+        ----------
+        source
+            |RemoteObject| which, on each worker, refers to a dictionary
+            whose keys consists of integers between `0` and `len(self)`.
+        destination
+            |RemoteObject| referring to a dictionary on each worker.
+        """
+        pass
+
 
 class RemoteObjectBase:
     pool = None
