@@ -8,7 +8,7 @@ from numbers import Number
 
 from pymor.core.interfaces import ImmutableInterface
 from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
-from pymor.parallel.interfaces import RemotePath, RemoteObjectBase
+from pymor.parallel.interfaces import RemotePath
 
 
 class VirtualPool(WorkerPoolBase):
@@ -89,13 +89,8 @@ class VirtualPool(WorkerPoolBase):
         else:
             return list(chain(*result))
 
-    def communicate(self, source, destination):
-        assert isinstance(source, RemoteObjectBase)
-        assert isinstance(destination, RemoteObjectBase)
-
-        source = self._map_obj(source)
+    def _communicate(self, source, destination):
         source = RemotePath(source.remote_resource, source.path)
-        destination = self._map_obj(destination)
         destination = RemotePath(destination.remote_resource, destination.path)
 
         physical_src = self.pool.apply(_prepare_communication, source, self.local_sizes_r, self.global_to_local_ids_r,
@@ -151,8 +146,6 @@ def _apply(*args, function_=None, store_=False, worker_=None, **kwargs):
 
 
 def _prepare_communication(src, worker_, global_to_local_ids):
-    assert isinstance(src, DistributedObjectWithPath)
-
     physical_src = {}
     for w in range(worker_):
         s = src.resolve_path(w)
@@ -170,9 +163,7 @@ def _prepare_communication(src, worker_, global_to_local_ids):
 
 
 def _finish_communication(physical_dst, dst, worker_, local_to_global_ids):
-    assert isinstance(dst, DistributedObjectWithPath)
     dsts = [dst.resolve_path(w) for w in range(worker_)]
-    assert all(isinstance(d, dict) for d in dsts)
 
     for src_physical_id, d in physical_dst.items():
         for dst_local_id, dd in d.items():

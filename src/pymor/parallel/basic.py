@@ -8,7 +8,7 @@ from itertools import chain
 import weakref
 
 from pymor.core.interfaces import ImmutableInterface, abstractmethod
-from pymor.parallel.interfaces import WorkerPoolInterface, RemoteObject, RemotePath
+from pymor.parallel.interfaces import WorkerPoolInterface, RemoteObjectBase, RemoteObject, RemotePath
 
 
 class WorkerPoolBase(WorkerPoolInterface):
@@ -28,6 +28,9 @@ class WorkerPoolBase(WorkerPoolInterface):
     @abstractmethod
     def _remove(self, remote_resource):
         pass
+
+    def _communicate(self, source, destination):
+        raise NotImplementedError
 
     def push(self, obj):
         if isinstance(obj, ImmutableInterface):
@@ -74,6 +77,15 @@ class WorkerPoolBase(WorkerPoolInterface):
         self.remote_objects.add(remote_object)
         weakref.finalize(remote_object, self._remove, remote_resource)
         return remote_object
+
+    def communicate(self, source, destination):
+        assert isinstance(source, RemoteObjectBase)
+        assert isinstance(destination, RemoteObjectBase)
+        self.apply(_check_communicate_args, source, destination, len(self))
+        source = self._map_obj(source)
+        destination = self._map_obj(destination)
+        self._communicate(source, destination)
+
 
     def _map_args(self, function, args, kwargs, scatter=False):
 
@@ -172,3 +184,14 @@ def _worker_call_function(function, args, kwargs, store):
         return remote_resource
     else:
         return result
+
+
+def _check_communicate_args(source, destination, size):
+    if not isinstance(source, dict):
+        raise ValueError('Source not a dictionary.')
+    for k in source:
+        if type(k) != int or not 0 <= k < size:
+            raise ValueError("Forbidden key '{}' in source dictionary".format(k))
+    if not isinstance(destination, dict):
+        raise ValueError('Destination not a dictionary.')
+    destination.clear()

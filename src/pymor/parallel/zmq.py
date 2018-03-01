@@ -19,8 +19,8 @@ import zmq
 
 from pymor.core.interfaces import BasicInterface
 from pymor.core.pickle import dumps, loads
-from pymor.parallel.basic import (WorkerPoolBase, _setup_worker, _store, _remove_object, _get_object, _worker_call_function)
-from pymor.parallel.interfaces import RemoteObjectBase
+from pymor.parallel.basic import (WorkerPoolBase, _setup_worker, _store, _remove_object, _get_object,
+                                  _worker_call_function)
 
 
 def split_message(message):
@@ -611,16 +611,8 @@ class ZMQPool(WorkerPoolBase):
         else:
             return result
 
-    def communicate(self, source, destination):
-        assert self.connected
-        assert isinstance(source, RemoteObjectBase)
-        assert isinstance(destination, RemoteObjectBase)
-
-        source = self._map_obj(source)
-        destination = self._map_obj(destination)
-
+    def _communicate(self, source, destination):
         self.command_socket.send_multipart([b'CMM', dumps(source), dumps(destination)])
-
         try:
             result = self.command_socket.recv_multipart()
             if not result == [b'OK']:
