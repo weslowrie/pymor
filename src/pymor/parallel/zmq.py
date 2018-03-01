@@ -94,6 +94,7 @@ class ZMQNode(BasicInterface):
 
     def __init__(self, routing_address, routing_is_child):
         self.routing_address, self.routing_is_child = routing_address, routing_is_child
+        self.routing = False
         self.ctx = zmq.Context()
         self.route_thread = Thread(target=self.route_loop)
         self.route_thread.start()
@@ -117,6 +118,9 @@ class ZMQNode(BasicInterface):
 
         quit = False
         while not quit:
+            if not self.routing:
+                time.sleep(0.1)
+                continue
             for socket in dict(poller.poll()):
                 message = socket.recv_multipart()
                 destination, return_path, message = split_message(message)
@@ -185,6 +189,7 @@ class ZMQWorker(ZMQNode):
 
     def eval_loop(self):
         socket = RoutedService(self.ctx, b'EVL', [b'OUT', b'CTL'])
+        self.routing = True
 
         socket.send_multipart([b'RWK'])
         message = socket.recv_multipart()
@@ -299,6 +304,7 @@ class ZMQController(ZMQNode):
     def ctl_loop(self):
         self.worker_paths = []
         socket = RoutedService(self.ctx, b'CTL')
+        self.routing = True
 
         try:
             while True:
@@ -311,9 +317,17 @@ class ZMQController(ZMQNode):
                     socket.send_multipart([b'OK'])
                 elif cmd == b'CON':
                     assert not self.connected
-                    self.connected = True
-                    self.logger.info('Pool frontend connected')
-                    socket.send_multipart([dumps(len(self.worker_paths))])
+                    assert len(args) == 1
+                    desired_size = int(args[0])
+                    current_size = len(self.worker_paths)
+                    if desired_size and desired_size != current_size:
+                        self.logger.info(
+                            'Not connecting pool frontend ({} connected, {} desired)'.format(current_size, desired_size)
+                        )
+                    else:
+                        self.connected = True
+                        self.logger.info('Pool frontend connected')
+                    socket.send_multipart([dumps(current_size)])
                 elif cmd == b'DSC':
                     assert self.connected
                     self.connected = False
@@ -516,10 +530,9 @@ class new_zmq_pool(BasicInterface):
         subprocess.Popen('python -m pymor.parallel.zmq controller ' + path,
                          start_new_session=True, shell=True)
 
-        self.logger.info('Waiting for workers to connect ...')
-        time.sleep(self.wait)
+        time.sleep(0.5)
 
-        self.pool = ZMQPool(path)
+        self.pool = ZMQPool(path, desired_size=self.num_workers)
         return self.pool
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -529,20 +542,33 @@ class new_zmq_pool(BasicInterface):
 
 class ZMQPool(WorkerPoolBase):
 
-    def __init__(self, controller_address, ctx=None):
+    def __init__(self, controller_address, desired_size=None, ctx=None):
         super().__init__()
         self.controller_address = controller_address
         self.ctx = ctx or zmq.Context()
         self.connected = False
-        self.connect()
+        self.connect(desired_size)
 
-    def connect(self):
+    def connect(self, desired_size=None):
         assert not self.connected
         self.logger.info('Connecting to controller at {}'.format(self.controller_address))
         self.control_socket = RoutedRequest(self.ctx, self.controller_address, [b'CTL'])
         self.command_socket = RoutedRequest(self.ctx, self.controller_address, [b'CMD'])
-        self.control_socket.send_multipart([b'CON'])
-        self.size = loads(self.control_socket.recv_multipart()[0])
+
+        desired_size = desired_size or 0
+        while True:
+            self.control_socket.send_multipart([b'CON', str(desired_size).encode()])
+            size = loads(self.control_socket.recv_multipart()[0])
+            if not desired_size or size == desired_size:
+                break
+            if size < desired_size:
+                self.logger.info('Only {} workers connected. Waiting ...'.format(size))
+                time.sleep(1)
+            else:
+                self.command_socket.close()
+                raise ValueError('Too many workers ({}) connected to controller'.format(size))
+        self.size = size
+
         self.command_socket.send_multipart([b'APL', dumps((_setup_worker, (), {})), dumps(None)])
         self.command_socket.recv_multipart()
         self.logger.info('Connected to {} workers'.format(self.size))
