@@ -7,6 +7,7 @@ from numbers import Number
 
 from pymor.core.interfaces import ImmutableInterface
 from pymor.parallel.basic import WorkerPoolBase, RemoteResourceWithPath
+from pymor.parallel.interfaces import RemoteObjectBase
 
 
 class DummyPool(WorkerPoolBase):
@@ -59,6 +60,19 @@ class DummyPool(WorkerPoolBase):
 
     def _copy(self, obj):
         return obj if isinstance(obj, ImmutableInterface) else deepcopy(obj)
+
+    def communicate(self, source, destination):
+        assert isinstance(source, RemoteObjectBase)
+        assert isinstance(destination, RemoteObjectBase)
+        source = self._map_obj(source)
+        source = [source.resolve_path(source.remote_resource[w]) for w in range(self.size)]
+        assert all(isinstance(s, dict) for s in source)
+        destination = self._map_obj(destination)
+        destination = [destination.resolve_path(destination.remote_resource[w]) for w in range(self.size)]
+
+        for i_s, s in enumerate(source):
+            for d, v in s.items():
+                destination[d][i_s] = v
 
 
 dummy_pool = DummyPool()
