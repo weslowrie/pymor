@@ -103,9 +103,11 @@ class ZMQNode(BasicInterface):
             frontend.connect(self.routing_address)
         else:
             frontend = self.ctx.socket(zmq.ROUTER)
+            frontend.router_mandatory = 1
             frontend.bind(self.routing_address)
 
         backend = self.ctx.socket(zmq.ROUTER)
+        backend.router_mandatory = 1
         backend.bind('inproc://backend')
 
         poller = zmq.Poller()
