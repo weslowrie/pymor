@@ -8,8 +8,7 @@ from itertools import chain
 import weakref
 
 from pymor.core.interfaces import ImmutableInterface, abstractmethod
-from pymor.parallel.interfaces import WorkerPoolInterface, RemoteObjectBase, RemoteObject, RemotePath
-from pymor.vectorarrays.interfaces import VectorArrayInterface
+from pymor.parallel.interfaces import WorkerPoolInterface, RemoteObject, RemotePath
 
 
 class WorkerPoolBase(WorkerPoolInterface):
@@ -78,23 +77,21 @@ class WorkerPoolBase(WorkerPoolInterface):
 
     def _map_args(self, function, args, kwargs, scatter=False):
 
-        pushed_immutable_objects = self._pushed_immutable_objects
-
-        def map_obj(o):
-            if isinstance(o, ImmutableInterface) and o.uid in pushed_immutable_objects:
-                return RemoteResourceWithPath(pushed_immutable_objects[o.uid].remote_resource)
-            elif isinstance(o, RemoteObject):
-                return RemoteResourceWithPath(o.remote_resource)
-            elif isinstance(o, RemotePath):
-                return RemoteResourceWithPath(o.remote_object.remote_resource, o.path)
-            else:
-                return o
-
-        mapped_function = map_obj(function)
-        mapped_args = args if scatter else tuple(map_obj(o) for o in args)
-        mapped_kwargs = {k: map_obj(v) for k, v in kwargs.items()}
+        mapped_function = self._map_obj(function)
+        mapped_args = args if scatter else tuple(self._map_obj(o) for o in args)
+        mapped_kwargs = {k: self._map_obj(v) for k, v in kwargs.items()}
 
         return mapped_function, mapped_args, mapped_kwargs
+
+    def _map_obj(self, o):
+        if isinstance(o, ImmutableInterface) and o.uid in self._pushed_immutable_objects:
+            return RemoteResourceWithPath(self._pushed_immutable_objects[o.uid].remote_resource)
+        elif isinstance(o, RemoteObject):
+            return RemoteResourceWithPath(o.remote_resource)
+        elif isinstance(o, RemotePath):
+            return RemoteResourceWithPath(o.remote_object.remote_resource, o.path)
+        else:
+            return o
 
 
 class RemoteResourceWithPath:
@@ -152,18 +149,20 @@ def _store(obj):
     return remote_resource
 
 
+def _get_object(obj):
+    global _remote_objects
+    if isinstance(obj, RemoteResourceWithPath):
+        return obj.resolve_path(_remote_objects[obj.remote_resource])
+    else:
+        return obj
+
+
 def _worker_call_function(function, args, kwargs, store):
     global _remote_objects, _remote_objects_created
 
-    def get_obj(obj):
-        if isinstance(obj, RemoteResourceWithPath):
-            return obj.resolve_path(_remote_objects[obj.remote_resource])
-        else:
-            return obj
-
-    function = get_obj(function)
-    args = (get_obj(v) for v in args)
-    kwargs = {k: get_obj(v) for k, v in kwargs.items()}
+    function = _get_object(function)
+    args = (_get_object(v) for v in args)
+    kwargs = {k: _get_object(v) for k, v in kwargs.items()}
 
     result = function(*args, **kwargs)
     if store:

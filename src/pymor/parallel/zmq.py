@@ -19,7 +19,8 @@ import zmq
 
 from pymor.core.interfaces import BasicInterface
 from pymor.core.pickle import dumps, loads
-from pymor.parallel.basic import (WorkerPoolBase, _setup_worker, _store, _remove_object, _worker_call_function)
+from pymor.parallel.basic import (WorkerPoolBase, _setup_worker, _store, _remove_object, _get_object, _worker_call_function)
+from pymor.parallel.interfaces import RemoteObjectBase
 
 
 def split_message(message):
@@ -193,22 +194,28 @@ class ZMQWorker(ZMQNode):
 
         while True:
             message = socket.recv_multipart()
-            assert len(message) == 1
 
             if message == [b'QIT']:
                 break
 
-            payload = loads(message[0])
-
-            f, args, kwargs = payload
-            self.logger.debug('Calling {}'.format(f.__name__))
             try:
                 self.evaluating = True
-                result = f(*args, **kwargs)
+                if message[0] == b'CMM':
+                    src, dst = message[1:]
+                    src, dst = loads(src), loads(dst)
+                    self.communicate(src, dst)
+                    result = b'OK'
+                else:
+                    assert len(message) == 1, message
+                    payload = loads(message[0])
+                    f, args, kwargs = payload
+                    self.logger.debug('Calling {}'.format(f.__name__))
+                    result = f(*args, **kwargs)
                 self.evaluating = False
             except KeyboardInterrupt:
                 print('interrupted')
                 sys.stdout.flush()
+                self.evaluating = False
                 result = None
             except Exception as e:
                 print('Exception raised during function evaluation:')
@@ -220,6 +227,61 @@ class ZMQWorker(ZMQNode):
             socket.send_multipart([dumps(result)])
 
         socket.close()
+
+    def communicate(self, src, dst):
+        socket = self.ctx.socket(zmq.DEALER)
+        socket.identity = b'CMM'
+        socket.connect('inproc://backend')
+
+        try:
+            try:
+                src = _get_object(src)
+                dst = _get_object(dst)
+                if not isinstance(src, dict):
+                    raise ValueError('Source not a dictionary.')
+                if not isinstance(dst, dict):
+                    raise ValueError('Destination not a dictionary.')
+            except Exception as e:
+                socket.send_multipart(format_message([b'OUT', b'CMM'], None, [b'ERR']))
+                raise e
+
+            socket.send_multipart(format_message([b'OUT', b'CMM'], None, [b'RDY']))
+
+            to_send = src.copy()
+            self.logger.debug('Communicating {} items'.format(len(to_send)))
+
+            sending = False
+            while True:
+                message = None
+                try:
+                    message = socket.recv_multipart(0 if not sending else zmq.NOBLOCK)
+                except zmq.ZMQError:
+                    pass
+
+                if message:
+                    destination, return_path, message = split_message(message)
+                    assert destination == []
+                    if message == [b'SND']:
+                        self.logger.debug('Starting to send.')
+                        sending = True
+                    elif message == [b'EOC']:
+                        break
+                    else:
+                        worker, value = message
+                        worker, value = int(worker), loads(value)
+                        dst[worker] = value
+                elif sending:
+                    if to_send:
+                        worker, value = to_send.popitem()
+                        assert isinstance(worker, int)
+                        message = format_message([b'OUT', b'CMM'], None, [str(worker).encode(), dumps(value)])
+                    else:
+                        sending = False
+                        message = format_message([b'OUT', b'CMM'], None, [b'EOC'])
+                    socket.send_multipart(message)
+
+        finally:
+            socket.close()
 
 
 class ZMQController(ZMQNode):
@@ -296,6 +358,12 @@ class ZMQController(ZMQNode):
                 replies = self.call_workers(b'EVL', None, [[dumps((_store, (loads(p),), {}))] for p in payload])
                 assert len(set(replies)) == 1
                 socket.send_multipart([replies[0]])
+            elif cmd == b'CMM':
+                assert self.connected
+                self.logger.debug('Worker to worker communication.')
+                src, dst = message
+                replies = self.communicate(src, dst)
+                socket.send_multipart(replies)
             elif cmd == b'QIT':
                 break
             else:
@@ -334,6 +402,84 @@ class ZMQController(ZMQNode):
         socket.close()
 
         return replies
+
+    def communicate(self, src, dst):
+        socket = self.ctx.socket(zmq.DEALER)
+        socket.identity = b'CMM'
+        socket.connect('inproc://backend')
+
+        self.logger.debug('Entering communcation mode.')
+        for w in range(len(self.worker_paths)):
+            socket.send_multipart(format_message(self.worker_paths[w] + [b'EVL'], None, [b'CMM', src, dst]))
+
+        self.logger.debug('Waiting for workers to settle.')
+        missing = set(range(len(self.worker_paths)))
+        failed = set()
+        while missing:
+            destination, return_path, message = split_message(socket.recv_multipart())
+            assert destination == []
+            assert message in [[b'RDY'], [b'ERR']], message
+            worker = self.worker_paths.index(return_path[:-1])
+            missing.remove(worker)
+            if message == [b'ERR']:
+                failed.add(worker)
+
+        if failed:
+            self.logger.critical('Communication error. Aborting.')
+            for w in range(len(self.worker_paths)):
+                if w not in failed:
+                    socket.send_multipart(format_message(self.worker_paths[w] + [b'EVL'], None, [b'CMM', src, dst]))
+
+            replies = [None] * len(self.worker_paths)
+            missing = set(range(len(self.worker_paths)))
+            while missing:
+                destination, return_path, message = split_message(socket.recv_multipart())
+                assert destination == []
+                assert len(message) == 1
+                worker = self.worker_paths.index(return_path[:-1])
+                missing.remove(worker)
+                replies[worker] = message[0]
+            return replies
+
+        self.logger.debug('Starting communcation.')
+        for w in range(len(self.worker_paths)):
+            socket.send_multipart(format_message(self.worker_paths[w] + [b'CMM'], None, [b'SND']))
+
+        sending = set(range(len(self.worker_paths)))
+        while sending:
+            self.logger.debug('Waiting for workers: {}'.format(list(sorted(sending))))
+            destination, return_path, message = split_message(socket.recv_multipart())
+            assert destination == []
+            if len(message) == 1:
+                assert message == [b'EOC'], (return_path, message)
+                sending.remove(self.worker_paths.index(return_path[:-1]))
+            else:
+                assert len(message) == 2
+                dst_worker, value = message
+                dst_worker = int(dst_worker)
+                assert 0 <= dst_worker < len(self.worker_paths), dst_worker
+                src_worker = self.worker_paths.index(return_path[:-1])
+                message = format_message(self.worker_paths[dst_worker] + [b'CMM'], None,
+                                         [str(src_worker).encode(), value])
+                socket.send_multipart(message)
+
+        self.logger.debug('Received replies from all workers.')
+
+        self.logger.debug('Leaving communication mode.')
+        for w in range(len(self.worker_paths)):
+            socket.send_multipart(format_message(self.worker_paths[w] + [b'CMM'], None, [b'EOC']))
+
+        missing = set(range(len(self.worker_paths)))
+        while missing:
+            destination, return_path, message = split_message(socket.recv_multipart())
+            assert destination == []
+            assert len(message) == 1 and loads(message[0]) == b'OK', message
+            worker = self.worker_paths.index(return_path[:-1])
+            missing.remove(worker)
+
+        self.logger.debug('Done.')
+        socket.close()
+        return [b'OK']
 
 
 class RemoteException(Exception):
@@ -464,6 +610,27 @@ class ZMQPool(WorkerPoolBase):
             return result[0]
         else:
             return result
+
+    def communicate(self, source, destination):
+        assert self.connected
+        assert isinstance(source, RemoteObjectBase)
+        assert isinstance(destination, RemoteObjectBase)
+
+        source = self._map_obj(source)
+        destination = self._map_obj(destination)
+
+        self.command_socket.send_multipart([b'CMM', dumps(source), dumps(destination)])
+
+        try:
+            result = self.command_socket.recv_multipart()
+            if not result == [b'OK']:
+                result = [loads(r) for r in result]
+                raise RemoteException(result)
+        except KeyboardInterrupt as e:
+            self.control_socket.send_multipart([b'ABT'])
+            self.control_socket.recv_multipart()
+            result = self.command_socket.recv_multipart()
+            raise e
 
     def __del__(self):
         if self.connected:
