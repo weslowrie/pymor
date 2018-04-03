@@ -99,6 +99,7 @@ def ei_greedy(U, error_norm=None, atol=None, rtol=None, max_interpolation_dofs=N
     errs = ERR.l2_norm() if error_norm is None else error_norm(ERR)
     max_err_ind = np.argmax(errs)
     initial_max_err = max_err = errs[max_err_ind]
+    max_errs.append(initial_max_err)
 
     # main loop
     while True:
