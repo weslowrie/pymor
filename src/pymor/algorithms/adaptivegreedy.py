@@ -111,7 +111,7 @@ def adaptive_greedy(d, reductor, parameter_space=None,
     if pool is None or pool is dummy_pool:
         pool = dummy_pool
     else:
-        logger.info('Using pool of {} workers for parallel greedy search'.format(len(pool)))
+        logger.info(f'Using pool of {len(pool)} workers for parallel greedy search')
 
     with RemoteObjectManager() as rom:
         # Push everything we need during the greedy search to the workers.
@@ -131,8 +131,8 @@ def adaptive_greedy(d, reductor, parameter_space=None,
             validation_set = parameter_space.sample_randomly(validation_mus)
         if visualize and sample_set.dim not in (2, 3):
             raise NotImplementedError
-        logger.info('Training set size: {}. Validation set size: {}'
-                    .format(len(sample_set.vertex_mus), len(validation_set)))
+        logger.info(f'Training set size: {len(sample_set.vertex_mus)}. '
+                    f'Validation set size: {len(validation_set)}.')
 
         extensions = 0
         max_errs = []
@@ -161,7 +161,7 @@ def adaptive_greedy(d, reductor, parameter_space=None,
                 max_val_err_ind = np.argmax(val_errors)
                 max_val_err, max_val_err_mu = val_errors[max_val_err_ind], validation_set[max_val_err_ind]
                 logger.info(f'Maximum validation error: {max_val_err}')
-                logger.info('Validation error to training error ratio: {:.3e}'.format(max_val_err / max_err))
+                logger.info(f'Validation error to training error ratio: {max_val_err/max_err:.3e}')
 
                 if max_val_err >= max_err * rho:  # overfitting?
 
@@ -180,7 +180,7 @@ def adaptive_greedy(d, reductor, parameter_space=None,
                     # select elements
                     sorted_indicators_inds = np.argsort(indicators)[::-1]
                     refinement_elements = sorted_indicators_inds[:max(int(len(sorted_indicators_inds) * theta), 1)]
-                    logger.info('Refining {} elements: {}'.format(len(refinement_elements), refinement_elements))
+                    logger.info(f'Refining {len(refinement_elements)} elements: {refinement_elements}')
 
                     # visualization
                     if visualize:
@@ -223,8 +223,8 @@ def adaptive_greedy(d, reductor, parameter_space=None,
                     if validation_mus <= 0:
                         validation_set = sample_set.center_mus + parameter_space.sample_randomly(-validation_mus)
 
-                    logger.info('New training set size: {}. New validation set size: {}'
-                                .format(len(sample_set.vertex_mus), len(validation_set)))
+                    logger.info(f'New training set size: {len(sample_set.vertex_mus)}. '
+                                f'New validation set size: {len(validation_set)}')
                     logger.info(f'Number of refinements: {sample_set.refinement_count}')
                     logger.info('')
                 else:
