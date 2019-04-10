@@ -25,8 +25,7 @@ services:
         - ./..:/pymor
     restart: "no"
     entrypoint: /usr/local/bin/dev-entrypoint.bash
-    command: >
-        bash -c "cd notebooks && jupyter notebook --ip 0.0.0.0 --no-browser"
+    command: jupyter notebook --ip 0.0.0.0 --no-browser --notebook-dir=/pymor/notebooks
 
   pytest:
     image: pymor/testing:3.7
