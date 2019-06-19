@@ -41,6 +41,7 @@ install_suggests = {'ipython>=3.0': 'an enhanced interactive python shell',
                     _PYTEST: 'testing framework required to execute unit tests',
                     'PyQt5': 'solution visualization for builtin discretizations',
                     'ipywidgets': 'notebook GUI elements',
+                    'vispy': 'webGL visualization',
                     'pillow': 'image library used for bitmap data functions'}
 # these will be refactored out into a visualization package
 vtk_vis = {'k3d>=2.6.2': 'in-notebook visualizations of 3D data',

@@ -46,7 +46,11 @@ RUN /bin/bash -c "\
     pip install -r /tmp/requirements-optional.txt && \
     pip install git+https://github.com/jupyter/nbconvert@master && \
     pip install nbviewer && \
-    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed'"
+    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed' && \
+    jupyter nbextension enable --py widgetsnbextension && \
+    jupyter nbextension enable --py vispy && \
+    jupyter labextension install @jupyter-widgets/jupyterlab-manager && \
+    jupyter labextension install vispy "
 
 USER ${NB_USER}
 
