@@ -31,7 +31,12 @@ ADD requirements*.txt /tmp/
 ADD .binder/ipython_kernel_config.py /etc/ipython/
 RUN /bin/bash -c "pip install jupyterlab && \
     pip install -r /tmp/requirements-optional.txt && \
-    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed'"
+    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed' && \
+    jupyter nbextension enable --py widgetsnbextension && \
+    jupyter nbextension enable --py vispy && \
+    jupyter labextension install @jupyter-widgets/jupyterlab-manager && \
+    jupyter labextension install vispy "
+
 ADD .binder/dev-entrypoint.bash /usr/local/bin/
 USER ${NB_USER}
 
