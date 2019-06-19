@@ -1,6 +1,6 @@
 #!/bin/bash
 
 cd /pymor
-python setup.py build_ext -i
+~/venv/bin/python setup.py build_ext -i
 
 exec "${@}"

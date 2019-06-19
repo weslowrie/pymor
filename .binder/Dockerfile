@@ -24,19 +24,29 @@ ARG PYMOR_JUPYTER_TOKEN
 USER root
 RUN useradd -d /home/pymor --shell /bin/bash -u ${NB_UID} -o -c "" -m ${NB_USER} && \
     chown -R ${NB_USER} /home/pymor /pymor/
+# the devel version of vispy needs npm/nodejs installed
+RUN /bin/bash -c "curl -sL https://deb.nodesource.com/setup_12.x | bash - && \
+      apt update && apt install nodejs npm && pip install virtualenv"
+USER ${NB_USER}
+RUN /bin/bash -c "virtualenv ~/venv && source ~/venv/bin/activate && \
+      git clone --recursive https://github.com/vispy/vispy.git ~/vispy && \
+      cd ~/vispy && \
+      pip install numpy cython ipywidgets && \
+      python setup.py build_py &&      pip install . && \
+      jupyter nbextension enable --py widgetsnbextension && \
+      jupyter nbextension enable --py vispy "
 
 # at this point setup.py exists only in image_binder
 # for the dev image it's only available via the mount at runtime
 ADD requirements*.txt /tmp/
 ADD .binder/ipython_kernel_config.py /etc/ipython/
-RUN /bin/bash -c "pip install jupyterlab && \
-    pip install -r /tmp/requirements-optional.txt && \
-    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed' && \
-    jupyter nbextension enable --py widgetsnbextension && \
-    jupyter nbextension enable --py vispy && \
-    jupyter labextension install @jupyter-widgets/jupyterlab-manager && \
-    jupyter labextension install vispy "
 
+RUN /bin/bash -c " source ~/venv/bin/activate && \
+    cd /pymor/ && pip install jupyterlab && \
+    pip install -r /tmp/requirements-optional.txt && \
+    [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed'"
+
+USER root
 ADD .binder/dev-entrypoint.bash /usr/local/bin/
 USER ${NB_USER}
 

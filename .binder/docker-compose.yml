@@ -26,7 +26,7 @@ services:
     restart: "no"
     entrypoint: /usr/local/bin/dev-entrypoint.bash
     command: >
-        bash -c "cd notebooks && jupyter notebook --ip 0.0.0.0 --no-browser"
+        bash -c "source ~/venv/bin/activate && cd notebooks && jupyter notebook --ip 0.0.0.0 --no-browser"
 
   pytest:
     image: pymor/testing:3.7
