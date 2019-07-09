@@ -11,7 +11,7 @@ from pymor.vectorarrays.interfaces import VectorArrayInterface
 
 
 def qr_svd(A, product=None):
-    """SVD of a |VectorArray|.
+    """SVD of a |VectorArray| using Gram-Schmidt process.
 
     If `product` is given, left singular vectors will be orthogonal with
     respect to it. Otherwise, the Euclidean inner product is used.
@@ -22,8 +22,8 @@ def qr_svd(A, product=None):
         The |VectorArray| for which the SVD is to be computed.
         The vectors are interpreted as columns in a matrix.
     product
-        Inner product |Operator| w.r.t. which the left singular vectors are
-        computed.
+        Inner product |Operator| w.r.t. which the left singular vectors
+        are computed.
 
     Returns
     -------
@@ -39,7 +39,7 @@ def qr_svd(A, product=None):
     assert len(A) > 0
     assert product is None or isinstance(product, OperatorInterface)
 
-    logger = getLogger('pymor.algorithms.qr_svd.qr_svd')
+    logger = getLogger('pymor.algorithms.svd_va.qr_svd')
 
     with logger.block('Computing QR decomposition ...'):
         Q, R = gram_schmidt(A, product=product, return_R=True, atol=0, rtol=0)
