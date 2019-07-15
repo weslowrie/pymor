@@ -15,7 +15,7 @@ from pymor.tools.floatcmp import float_cmp_all
 from pymor.vectorarrays.interfaces import VectorArrayInterface
 
 
-def mos(A, modes=None, product=None, rtol=4e-8, atol=0., l2_err=0., orthonormalize=True,
+def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., orthonormalize=True,
         check=True, check_tol=1e-10):
     """Method of snapshots.
 
@@ -29,11 +29,11 @@ def mos(A, modes=None, product=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
     ----------
     A
         The |VectorArray| for which the POD is to be computed.
+    product
+        Inner product |Operator| w.r.t. which the POD is computed.
     modes
         If not `None`, only the first `modes` POD modes (singular vectors) are
         returned.
-    product
-        Inner product |Operator| w.r.t. which the POD is computed.
     rtol
         Singular values smaller than this value multiplied by the largest singular
         value are ignored.
@@ -64,8 +64,8 @@ def mos(A, modes=None, product=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
 
     assert isinstance(A, VectorArrayInterface)
     assert len(A) > 0
-    assert modes is None or modes <= len(A)
     assert product is None or isinstance(product, OperatorInterface)
+    assert modes is None or modes <= len(A)
 
     logger = getLogger('pymor.algorithms.pod.pod')
 
@@ -117,7 +117,8 @@ def mos(A, modes=None, product=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
     return U, s, Vh
 
 
-def qr_svd(A, product=None):
+def qr_svd(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., check=True,
+           check_tol=1e-10):
     """SVD of a |VectorArray| using Gram-Schmidt process.
 
     If `product` is given, left singular vectors will be orthogonal with
@@ -131,6 +132,25 @@ def qr_svd(A, product=None):
     product
         Inner product |Operator| w.r.t. which the left singular vectors
         are computed.
+    modes
+        If not `None`, only the first `modes` POD modes (singular vectors) are
+        returned.
+    rtol
+        Singular values smaller than this value multiplied by the largest singular
+        value are ignored.
+    atol
+        Singular values smaller than this value are ignored.
+    l2_err
+        Do not return more modes than needed to bound the l2-approximation
+        error by this value. I.e. the number of returned modes is at most ::
+
+            argmin_N { sum_{n=N+1}^{infty} s_n^2 <= l2_err^2 }
+
+        where `s_n` denotes the n-th singular value.
+    check
+        If `True`, check the computed POD modes for orthonormality.
+    check_tol
+        Tolerance for the orthonormality check.
 
     Returns
     -------
@@ -145,6 +165,7 @@ def qr_svd(A, product=None):
     assert isinstance(A, VectorArrayInterface)
     assert len(A) > 0
     assert product is None or isinstance(product, OperatorInterface)
+    assert modes is None or modes <= len(A)
 
     logger = getLogger('pymor.algorithms.svd_va.qr_svd')
 
@@ -154,7 +175,35 @@ def qr_svd(A, product=None):
     logger.info('Computing SVD of R.')
     U2, s, Vh = spla.svd(R, lapack_driver='gesvd')
 
-    logger.info('Computing left singular vectors.')
+    logger.info('Choosing the number of modes.')
+    tol = max(rtol * s[0], atol)
+    above_tol = np.where(s >= tol)[0]
+    if len(above_tol) == 0:
+        return A.space.empty(), np.array([]), np.zeros((0, len(A)))
+    last_above_tol = above_tol[-1]
+
+    errs = np.concatenate((np.cumsum(s[::-1] ** 2)[::-1], [0.]))
+    below_err = np.where(errs <= l2_err**2)[0]
+    first_below_err = below_err[0]
+
+    selected_modes = min(first_below_err, last_above_tol + 1)
+    if modes is not None:
+        selected_modes = min(selected_modes, modes)
+
+    U2 = U2[:, :selected_modes]
+    s = s[:selected_modes]
+    Vh = Vh[:selected_modes]
+
+    logger.info(f'Computing left singular vectors ({selected_modes} modes).')
     U = Q.lincomb(U2.T)
+
+    if check:
+        logger.info('Checking orthonormality ...')
+        if not float_cmp_all(U.inner(U, product), np.eye(len(U)), atol=check_tol,
+                             rtol=0.):
+            err = np.max(np.abs(U.inner(U, product) - np.eye(len(U))))
+            raise AccuracyError(f'result not orthogonal (max err={err})')
+        if len(U) < len(Vh):
+            raise AccuracyError('additional orthonormalization removed basis vectors')
 
     return U, s, Vh
