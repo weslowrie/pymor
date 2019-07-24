@@ -8,6 +8,7 @@ import numpy as np
 import scipy.linalg as spla
 
 from pymor.algorithms.gram_schmidt import gram_schmidt
+from pymor.core.defaults import defaults
 from pymor.core.exceptions import AccuracyError
 from pymor.core.logger import getLogger
 from pymor.operators.interfaces import OperatorInterface
@@ -15,8 +16,9 @@ from pymor.tools.floatcmp import float_cmp_all
 from pymor.vectorarrays.interfaces import VectorArrayInterface
 
 
-def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., orthonormalize=True,
-        check=True, check_tol=1e-10):
+@defaults('rtol', 'atol', 'l2_err', 'check', 'check_tol')
+def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., check=True,
+        check_tol=1e-10):
     """Method of snapshots.
 
     Viewing the |VectorArray| `A` as a `A.dim` x `len(A)` matrix,
@@ -46,9 +48,6 @@ def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
             argmin_N { sum_{n=N+1}^{infty} s_n^2 <= l2_err^2 }
 
         where `s_n` denotes the n-th singular value.
-    orthonormalize
-        If `True`, orthonormalize the computed POD modes again using
-        the :func:`~pymor.algorithms.gram_schmidt.gram_schmidt` algorithm.
     check
         If `True`, check the computed POD modes for orthonormality.
     check_tol
@@ -101,10 +100,6 @@ def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
     with logger.block(f'Computing left-singular vectors ({len(Vh)} vectors) ...'):
         U = A.lincomb(Vh / s[:, np.newaxis])
 
-    if orthonormalize:
-        with logger.block('Re-orthonormalizing U modes ...'):
-            U = gram_schmidt(U, product=product, copy=False)
-
     if check:
         logger.info('Checking orthonormality ...')
         if not float_cmp_all(U.inner(U, product), np.eye(len(U)), atol=check_tol,
@@ -117,6 +112,7 @@ def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., orthonormali
     return U, s, Vh
 
 
+@defaults('rtol', 'atol', 'l2_err', 'check', 'check_tol')
 def qr_svd(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., check=True,
            check_tol=1e-10):
     """SVD of a |VectorArray| using Gram-Schmidt process.
