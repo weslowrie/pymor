@@ -16,6 +16,8 @@ stages:
             - stuck_or_timeout_failure
             - api_failure
     only: ['branches', 'tags', 'triggers', 'merge-requests']
+    except:
+        - /^staging/.*$/i
 
 .pytest:
     extends: .test_base
@@ -103,6 +105,7 @@ verify setup.py:
 .docker-in-docker:
     tags:
       - docker-in-docker
+    extends: .test_base
     retry:
         max: 2
         when:
