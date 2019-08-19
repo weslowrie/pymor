@@ -26,7 +26,7 @@ RUN useradd -d /home/pymor --shell /bin/bash -u ${NB_UID} -o -c "" -m ${NB_USER}
     chown -R ${NB_USER} /home/pymor /pymor/
 # the devel version of vispy needs npm/nodejs installed
 RUN /bin/bash -c "curl -sL https://deb.nodesource.com/setup_12.x | bash - && \
-      apt update && apt install nodejs npm && pip install virtualenv"
+      apt update && apt install -y nodejs && pip install -U virtualenv"
 USER ${NB_USER}
 RUN /bin/bash -c "virtualenv ~/venv && source ~/venv/bin/activate && \
       git clone --recursive https://github.com/vispy/vispy.git ~/vispy && \
