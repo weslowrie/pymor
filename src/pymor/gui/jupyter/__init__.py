@@ -13,14 +13,18 @@ inside the given notebook.
 import IPython
 import numpy as np
 
-from pymor.core import logger
+from pymor.core import logger, config
 from pymor.core.logger import ColoredFormatter
-from pymor.grids.constructions import flatten_grid
-from pymor.grids.referenceelements import triangle
 from ipywidgets import IntProgress, HTML, VBox
 import ipywidgets
 import logging
 
+if config.config.HAVE_VISPY:
+    from pymor.gui.jupyter.vispy import visualize_vispy
+    default_visualizer = visualize_vispy
+else:
+    from pymor.gui.jupyter.visualizer import visualize_patch
+    default_visualizer = visualize_patch
 
 
 def progress_bar(sequence, every=None, size=None, name='Parameters'):
