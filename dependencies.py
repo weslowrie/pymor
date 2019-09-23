@@ -42,7 +42,7 @@ install_suggests = {'ipython>=3.0': 'an enhanced interactive python shell',
                     'PyQt5': 'solution visualization for builtin discretizations',
                     'ipywidgets': 'notebook GUI elements',
                     'pillow': 'image library used for bitmap data functions'}
-doc_requires = ['sphinx>=1.5', 'cython', 'numpy']
+doc_requires = ['sphinx>=1.5', 'cython', 'numpy', 'nbsphinx']
 ci_requires = ['pytest-cov', 'pytest-xdist', 'check-manifest', 'nbconvert',
                'readme_renderer[md]', 'rstcheck', 'codecov', 'twine', 'pytest-memprof',
                'testipynb']
@@ -105,7 +105,7 @@ def extras():
 
     return {
         'full': [_ex(f) for f in _candidates(blacklist=[])],
-        'ci':  ci_requires,
+        'ci':  ci_requires + doc_requires,
         'docs': doc_requires,
     }
 
