@@ -45,16 +45,17 @@ numpy 3 6:
     variables:
         PYMOR_PYTEST_MARKER: "numpy"
 
-docs:
+pages:
     extends: .test_base
     image: pymor/testing:3.6
     stage: test
     script: .ci/gitlab/test_docs.bash
+    except:
+        - /^github\/PR_.*$/
+        - /^staging/.*$/i
     artifacts:
-        name: "$CI_JOB_STAGE-$CI_COMMIT_REF_SLUG"
-        expire_in: 3 months
         paths:
-            - docs/_build/html
+            - public
 
 {%- for py, m in matrix %}
 {{m}} {{py[0]}} {{py[2]}}:
@@ -157,7 +158,7 @@ trigger_binder {{loop.index}}/{{loop.length}}:
     stage: deploy
     # there's no need to run this if repo2docker fails already
     #needs: "repo2docker"
-    only: 
+    only:
         - master
         - tags
     before_script:
