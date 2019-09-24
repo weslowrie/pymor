@@ -47,8 +47,11 @@ numpy 3 6:
 
 pages:
     extends: .test_base
-    image: pymor/testing:3.6
+    image: pymor/testing:3.7
     stage: test
+    cache:
+      paths:
+        - public
     script: .ci/gitlab/test_docs.bash
     only:
       - master
