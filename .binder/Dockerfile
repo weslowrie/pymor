@@ -31,6 +31,7 @@ ADD requirements*.txt /tmp/
 ADD .binder/ipython_kernel_config.py /etc/ipython/
 RUN /bin/bash -c "pip install jupyterlab && \
     pip install -r /tmp/requirements-optional.txt && \
+    pip install -r /tmp/requirements-ci.txt && \
     [[ -e /pymor/setup.py ]] && pip install /pymor || echo 'no install needed'"
 ADD .binder/dev-entrypoint.bash /usr/local/bin/
 USER ${NB_USER}
