@@ -55,10 +55,12 @@ def mos(A, product=None, modes=None, rtol=4e-8, atol=0., l2_err=0., check=True,
 
     Returns
     -------
-    POD
-        |VectorArray| of POD modes.
-    SVALS
+    U
+        |VectorArray| of left singular vectors.
+    s
         Sequence of singular values.
+    Vh
+        |NumPy array| of right singular vectors.
     """
 
     assert isinstance(A, VectorArrayInterface)
