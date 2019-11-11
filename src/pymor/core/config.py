@@ -22,6 +22,9 @@ def _get_fenics_version():
         warnings.warn(f'FEniCS bindings have been tested for version 2019.1.0 (installed: {df.__version__}).')
     return df.__version__
 
+def _get_pyclaw_version():
+    import clawpack
+    return clawpack.__version__
 
 def is_windows_platform():
     return sys.platform == 'win32' or sys.platform == 'cygwin'
@@ -102,6 +105,7 @@ _PACKAGES = {
     'SCIPY_LSMR': lambda: hasattr(import_module('scipy.sparse.linalg'), 'lsmr'),
     'SLYCOT': lambda: _get_slycot_version(),
     'SPHINX': lambda: import_module('sphinx').__version__,
+    'PYCLAW': lambda: import_module('clawpack').__version__,
 }
 
 
