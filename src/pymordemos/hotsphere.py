@@ -420,8 +420,8 @@ if __name__ == "__main__":
     print(np.shape(modes.to_numpy()))
     print(svals)
 
-    # Write ROM to File
-    writeROMtoFile(U, modes, outDir)
+    ## Write ROM to File
+    # writeROMtoFile(U, modes, outDir)
 
     # Plot the singular values
     plt.figure()
