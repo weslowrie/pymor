@@ -11,11 +11,11 @@ if config.HAVE_PYCLAW:
     import numpy as np
 
     from pymor.core.defaults import defaults
-    from pymor.core.interfaces import BasicInterface
-    from pymor.operators.basic import OperatorBase
+    from pymor.core.base import BasicObject
+    from pymor.operators.interface import Operator
     from pymor.vectorarrays.numpy import NumpyVectorSpace
 
-    class PyClawOperator(OperatorBase):
+    class PyClawOperator(Operator):
         """PyClaw |Operator|"""
 
         linear = True
@@ -105,7 +105,7 @@ if config.HAVE_PYCLAW:
                 qr.append(np.reshape(self.claw.frames[f].q, dim, order='F'))
             return self.solution_space.make_array(qr)
 
-    class PyClawVisualizer(BasicInterface):
+    class PyClawVisualizer(BasicObject):
         """Visualize a PyClaw Solution
 
         Parameters

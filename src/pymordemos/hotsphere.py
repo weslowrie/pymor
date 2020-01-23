@@ -383,6 +383,14 @@ def writeROMtoFile(U,modes,outDir):
     f.close()
 
 
+def reduce_pod(fom, reductor, snapshots, basis_size):
+    basis, singular_values = pod(snapshots, modes=basis_size)
+    reductor.extend_basis(basis, method='trivial')
+    rom = reductor.reduce()
+
+    return rom
+
+
 # -------------------------------------------------------------------------------
 # __main__()
 # -------------------------------------------------------------------------------
@@ -404,12 +412,12 @@ if __name__ == "__main__":
     range_space = NumpyVectorSpace(problem.claw.solution.state.q.size)
     op = PyClawOperator(problem.claw, source_space, range_space)
     vis = PyClawVisualizer(problem.claw)
-    ts = ExplicitEulerTimeStepper(nt=480)
+    ts = ExplicitEulerTimeStepper(nt=240)
     problem.claw.solver.setup(problem.claw.solution)
 
-    fom = InstationaryModel(T=240., initial_data=q0_array, operator=op,
+    fom = InstationaryModel(T=120., initial_data=q0_array, operator=op,
                             rhs=None, mass=None, visualizer=vis, time_stepper=ts,
-                            num_values=80)
+                            num_values=20)
 
     # Constant Timesteps
     dt = fom.T/fom.time_stepper.nt
